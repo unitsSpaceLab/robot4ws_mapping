@@ -1,0 +1,55 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+  - Class: rviz/Selection
+    Name: Selection
+  - Class: rviz/Tool Properties
+    Name: Tool Properties
+  - Class: rviz/Views
+    Name: Views
+  - Class: rviz/Time
+    Experimental: false
+    Name: Time
+    SyncMode: 0
+    SyncSource: ""
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 0.1
+      Class: rviz/Grid
+      Color: 160; 160; 160
+      Enabled: true
+      Name: Grid
+      Plane: XY
+      Reference Frame: <Fixed Frame>
+      Status:
+        - Class: rviz/StatusProperty
+          Name: Message
+          Value: OK
+      Value: 0
+      X Cells: 0
+      Y Cells: 0
+    - Class: grid_map_rviz_plugin/GridMap
+      Enabled: true
+      Name: GridMap
+      Topic: /grid_map
+      Status:
+        - Class: rviz/StatusProperty
+          Name: Message
+          Value: OK
+  Enabled: true
+  Global Options:
+    Fixed Frame: grid_map
+  Name: Root
+  Tools:
+    - Class: rviz/MoveCamera
+Window Geometry:
+  Displays:
+    collapse_state: 0
+    expanded:
+      - /GridMap
+  Height: 950
+  Width: 1920
+  X: 0
+  Y: 23
