@@ -1,0 +1,19 @@
+# map params
+grid_map_topic_name: grid_map
+cell_size: 0.1 # meters
+global_map_size: 5.0 # meters
+local_map_size: 5.0 # meters
+grid_map_frame_id: Archimede_foot_start
+
+# Archimede robot params
+foot_print_frame_id: Archimede_footprint
+
+# lidar params
+point_cloud_max_height_threshold: 200 # meters
+lidar_variance: 0.2
+lidar_frame_id: Archimede_velodyne
+
+# ros topics params
+lidar_topic_name: /Archimede/velodyne_points
+odom_topic_name: /gazebo_2_odom
+costmap2d_topic_name: /costmap_2d_node/costmap/costmap

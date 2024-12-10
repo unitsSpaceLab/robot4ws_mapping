@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   tf2_ros
   sensor_msgs
   costmap_2d
+  tf
 )
 
 
@@ -37,6 +38,9 @@ install(
 
 add_executable(gridmap_node src/gridmap_node.cpp)
 target_link_libraries(gridmap_node ${catkin_LIBRARIES})
+
+add_executable(link_states_to_odom_node src/link_states_to_odom_node.cpp)
+target_link_libraries(link_states_to_odom_node ${catkin_LIBRARIES})
 
 
 

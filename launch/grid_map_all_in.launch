@@ -1,0 +1,69 @@
+<!-- 
+  @author Simone Cottiga
+  @email simone.cottiga@phd.units.it
+ -->
+
+<launch>
+  <!-- gridmap arguments -->
+  <arg name="/use_sim_time" default="true"/>
+  <arg name="gridmap_config_file" default="archimede_gridmap.yaml"/>
+  <arg name="costmap_config_file" default="costmap_2d_archimede.yaml"/>
+
+  <!-- archimede_gazebo simulations arguments -->
+  <arg name="include_gazebo" default="false"/>
+  <arg name="include_teleop" default="false"/>
+  <arg name="rocker_differential" default="false"/>
+  <arg name="world_name" default="tilted_floor_walls_and_obstacles.world"/>
+  <arg name="p38_env" default="/home/ros/p38Env/bin/python3.8"/>
+  <arg name="add_velodyneHDL32E" default="true"/>
+
+  <!-- link_state_to_odom node argument -->
+  <arg name="include_linkstates2odom" default="false"/>
+
+  <!-- play bag arguments -->
+  <arg name="include_bag" default="false"/>  
+  <arg name="bag_file" default="/media/ros/142F8F8C794D9A16/test_filter_bag.bag"/>
+
+  <!-- grid_map stuffs -->
+  <rosparam command="load" file="$(find robot4ws_mapping)/config/$(arg gridmap_config_file)" ns="gridmap"/>
+
+  <node name="p2g_listener" pkg="robot4ws_mapping" type="gridmap_node" output="screen"/>
+
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find robot4ws_mapping)/rviz/grid_map.rviz" />
+
+  <node name="costmap_2d_node" pkg="costmap_2d" type="costmap_2d_node" output="screen">
+    <rosparam command="load" file="$(find robot4ws_mapping)/config/$(arg costmap_config_file)" ns="costmap"/>
+  </node>
+
+  <!-- include archimede_gazebo -->
+  <group if="$(arg include_gazebo)">
+    <group unless="$(arg include_teleop)">
+      <include file="$(find robot4ws_simulations)/launch/archimede_gazebo_simulation_with_kinematics.launch">
+        <arg name="rocker_differential" value="$(arg rocker_differential)"/>
+        <arg name="world_name" value="$(arg world_name)"/>
+        <arg name="p38_env" value="$(arg p38_env)"/>
+        <arg name="add_velodyneHDL32E" value="$(arg add_velodyneHDL32E)"/>
+      </include>
+    </group>
+    <group if="$(arg include_teleop)">
+      <include file="$(find robot4ws_simulations)/launch/archimede_gazebo_simulation_remote_controlled.launch">
+        <arg name="rocker_differential" value="$(arg rocker_differential)"/>
+        <arg name="world_name" value="$(arg world_name)"/>
+        <arg name="p38_env" value="$(arg p38_env)"/>
+        <arg name="add_velodyneHDL32E" value="$(arg add_velodyneHDL32E)"/>
+      </include>
+    </group>
+  </group>
+
+  <!-- include link_state_to_odom -->
+  <group if="$(arg include_linkstates2odom)">
+    <include file="$(find robot4ws_mapping)/launch/link_state_to_odom.launch"/>
+  </group>
+
+  <!-- include play bag -->
+  <group if="$(arg include_bag)">
+    <node pkg="rosbag" type="play" name="rosbag_play" args="$(arg bag_file)" output="screen"/>
+  </group>
+
+</launch>
+
