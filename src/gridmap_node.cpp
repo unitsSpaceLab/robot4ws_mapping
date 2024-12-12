@@ -265,21 +265,22 @@ public:
     }
 
     void costmap_callback(const nav_msgs::OccupancyGrid::ConstPtr& msg){
-        //geometry_msgs::TransformStamped actual_transform = transformStamped;
-        geometry_msgs::TransformStamped actual_transform;
-        actual_transform.transform.translation.x = 0.0;
-        actual_transform.transform.translation.y = 0.0;
-        actual_transform.transform.translation.z = 0.0;
-
-        actual_transform.transform.rotation.x = 0.0;
-        actual_transform.transform.rotation.y = 0.0;
-        actual_transform.transform.rotation.z = 0.0;
-        actual_transform.transform.rotation.w = 1.0;
-
         grid_map::GridMap localMap;
         grid_map::GridMapRosConverter::fromOccupancyGrid(*msg, "obstacles", localMap);
 
-        updateGlobalMap(localMap, "obstacles", actual_transform);
+        //TODO: Genera buchi nella mappa, provare a fixare che semplifica molto.
+        //globalMap_.addDataFrom(localMap, "obstacles", true, true);
+
+        geometry_msgs::TransformStamped odom_transform_message;
+        odom_transform_message.transform.translation.x = 0.0;
+        odom_transform_message.transform.translation.y = 0.0;
+        odom_transform_message.transform.translation.z = 0.0;
+
+        odom_transform_message.transform.rotation.x = 0.0;
+        odom_transform_message.transform.rotation.y = 0.0;
+        odom_transform_message.transform.rotation.z = 0.0;
+        odom_transform_message.transform.rotation.w = 1.0;
+        updateGlobalMap(localMap, "obstacles", odom_transform_message);
     }
 
     void publish_gridmap()

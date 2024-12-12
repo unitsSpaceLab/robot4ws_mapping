@@ -4,6 +4,4 @@
 
   <node name="link_state_to_odom" pkg="robot4ws_mapping" type="link_states_to_odom_node" output="screen"/>
 
-  <node name="static_tf0" pkg="tf2_ros" type="static_transform_publisher" args="0 0 0.158679999951 0 0 0 /Archimede_footprint /Archimede_base_link"/>
-
 </launch>
