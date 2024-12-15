@@ -5,6 +5,7 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /Global Options1
+        - /GridMap1
       Splitter Ratio: 0.5
     Tree Height: 703
   - Class: rviz/Selection
@@ -52,7 +53,7 @@ Visualization Manager:
       Autocompute Intensity Bounds: true
       Class: grid_map_rviz_plugin/GridMap
       Color: 200; 200; 200
-      Color Layer: elevation
+      Color Layer: obstacles
       Color Transformer: GridMapLayer
       Enabled: true
       Height Layer: elevation
@@ -96,9 +97,9 @@ Visualization Manager:
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 0
-        Y: 0
-        Z: 0
+        X: 2.818988084793091
+        Y: -0.9673368334770203
+        Z: 0.4531949460506439
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false

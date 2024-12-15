@@ -13,8 +13,8 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   tf2_ros
   sensor_msgs
-  costmap_2d
   tf
+  pcl_ros
 )
 
 

@@ -11,6 +11,10 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <tf2_ros/transform_listener.h>
+#include <pcl_ros/point_cloud.h>
+#include <pcl/filters/crop_box.h>
+#include <pcl_conversions/pcl_conversions.h>
+#include <visualization_msgs/MarkerArray.h>
 
 
 class multi_layer_map{
@@ -22,6 +26,10 @@ public:
         elevation_layer_name = "elevation";
         elevation_variance_layer_name = "elevation_variance";
         obstacles_layer_name = "obstacles";
+        surface_orientation_x_layer_name = "surface_orientation_x";
+        surface_orientation_y_layer_name = "surface_orientation_y";
+        surface_orientation_z_layer_name = "surface_orientation_z";
+        surface_orientation_variance_layer_name = "surface_orientation_variance";
 
         // Global map init
         globalMap_.setFrameId(grid_map_frame_id);
@@ -29,12 +37,17 @@ public:
         globalMap_.add(elevation_layer_name, 0.0);
         globalMap_.add(elevation_variance_layer_name, 1e6);
         globalMap_.add(obstacles_layer_name, 0.0);
+        globalMap_.add(surface_orientation_x_layer_name, 0);
+        globalMap_.add(surface_orientation_y_layer_name, 0);
+        globalMap_.add(surface_orientation_z_layer_name, 0);
+        globalMap_.add(surface_orientation_variance_layer_name, 1e6);
 
-        // Subscriber per PointCloud2
         cloud_sub = nh_.subscribe(lidar_topic_name, 10, &multi_layer_map::pointCloudCallback, this);
         odom_sub = nh_.subscribe(odom_topic_name, 5, &multi_layer_map::odom_callback, this);
-        costmap_sub = nh_.subscribe(costmap2d_topic_name, 5, &multi_layer_map::costmap_callback, this);
+
         grid_map_pub = nh_.advertise<grid_map_msgs::GridMap>(grid_map_topic_name, 1, true);
+        filter_cloud_pub = nh_.advertise<sensor_msgs::PointCloud2>("Archimede/velodyne_points_filtered", 1, true);
+        surface_normal_marker_pub = nh_.advertise<visualization_msgs::MarkerArray>("surface_normal", 1);
 
         pose_received = false;
     }
@@ -46,46 +59,240 @@ public:
             return;
         }
 
-        geometry_msgs::TransformStamped actual_transform = odom_transform_msg;
+        geometry_msgs::TransformStamped actual_transform = gridmap_to_lidar_transform_msg;
 
-        // Converti PointCloud2 in GridMap locale
+        sensor_msgs::PointCloud2 filtered_cloud = filterPointCloud(cloud);
+
+        // Convert PointCloud2 to local GridMap
         grid_map::GridMap localMap({elevation_layer_name, "cloudPoint_counter", elevation_variance_layer_name});
         localMap.setGeometry(grid_map::Length(local_map_size, local_map_size), cell_size);
         localMap[elevation_layer_name].setZero();
         localMap["cloudPoint_counter"].setZero();
         localMap[elevation_variance_layer_name].setConstant(1e6);
 
-        // Codice per convertire PointCloud2 in GridMap
-        if (cloud != nullptr) {
-            for (sensor_msgs::PointCloud2ConstIterator<float> iter_x(*cloud, "x"), iter_y(*cloud, "y"), iter_z(*cloud, "z");
-                 iter_x != iter_x.end();
-                 ++iter_x, ++iter_y, ++iter_z)
-            {
-                if (std::isnan(*iter_x) || std::isnan(*iter_y) || std::isnan(*iter_z)) {
-                    ROS_WARN("Skipping cloud point with NaN value: x = %f, y = %f, z = %f", *iter_x, *iter_y, *iter_z);
-                    continue;
-                }
-
-                // skipping cloud points above the heigth treshold
-                if(*iter_z > pc_height_threshold) continue;
-
-                grid_map::Position position(*iter_x, *iter_y);
-                if (localMap.isInside(position)) {
-                    localMap.atPosition("cloudPoint_counter", position)+=1;
-                    int cell_count = localMap.atPosition("cloudPoint_counter", position);
-                    double old_mean = localMap.atPosition(elevation_layer_name, position);
-                    double old_variance = localMap.atPosition(elevation_variance_layer_name, position);
-
-                    double new_mean = (old_mean * (cell_count-1) + *iter_z)/cell_count;
-
-                    localMap.atPosition(elevation_layer_name, position) = new_mean;  
-                    localMap.atPosition(elevation_variance_layer_name, position) = lidar_variance;
-                    }
+        for (sensor_msgs::PointCloud2ConstIterator<float> iter_x(filtered_cloud, "x"), iter_y(filtered_cloud, "y"), iter_z(filtered_cloud, "z");
+                iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z)
+        {
+            if (std::isnan(*iter_x) || std::isnan(*iter_y) || std::isnan(*iter_z)) {
+                ROS_WARN("Skipping cloud point with NaN value: x = %f, y = %f, z = %f", *iter_x, *iter_y, *iter_z);
+                continue;
             }
-        }
 
+            // skipping cloud points above the heigth treshold
+            if(*iter_z > pc_height_threshold) continue;
+
+            grid_map::Position position(*iter_x, *iter_y);
+            if (localMap.isInside(position)) {
+                localMap.atPosition("cloudPoint_counter", position)+=1;
+                int cell_count = localMap.atPosition("cloudPoint_counter", position);
+                double old_mean = localMap.atPosition(elevation_layer_name, position);
+                double old_variance = localMap.atPosition(elevation_variance_layer_name, position);
+
+                double new_mean = (old_mean * (cell_count-1) + *iter_z)/cell_count;
+
+                localMap.atPosition(elevation_layer_name, position) = new_mean;  
+                localMap.atPosition(elevation_variance_layer_name, position) = lidar_variance;
+                }
+        }
+    
         std::list<std::tuple<geometry_msgs::PointStamped,geometry_msgs::PointStamped>> transformed_point_tuple_list = applyTransform(localMap, elevation_layer_name, elevation_variance_layer_name, actual_transform);
         updateGlobalMapKalman(localMap, elevation_layer_name, elevation_variance_layer_name, actual_transform, transformed_point_tuple_list);
+        
+        //update surface normals
+        update_surface_orientation(transformed_point_tuple_list);   
+    }
+
+    void update_surface_orientation(std::list<std::tuple<geometry_msgs::PointStamped, geometry_msgs::PointStamped>> local_global_points_mapping) {
+        // Method to update surface orientation using finite difference theory and error propagation for variance
+        for (const auto& t : local_global_points_mapping) {
+            geometry_msgs::PointStamped global_point = std::get<0>(t);
+            grid_map::Position position(global_point.point.x, global_point.point.y);
+
+            // Elevation gradient along x and y
+            double dz_dx = 0.0;
+            double dz_dy = 0.0;
+
+            // Gradient variance
+            double variance_dz_dx = 0.0;
+            double variance_dz_dy = 0.0;
+
+            // Finite differences for calculating dz/dx and error propagation for variance
+            if (!globalMap_.isInside(grid_map::Position(position.x() + cell_size, position.y()))) {
+                // Right border (x-grid)
+                grid_map::Index prevIdx1, prevIdx2;
+                globalMap_.getIndex(grid_map::Position(position.x() - cell_size, position.y()), prevIdx1);
+                globalMap_.getIndex(grid_map::Position(position.x() - 2 * cell_size, position.y()), prevIdx2);
+                if (globalMap_.isValid(prevIdx1, elevation_layer_name) && globalMap_.isValid(prevIdx2, elevation_layer_name)) {
+                    dz_dx = (3 * globalMap_.atPosition(elevation_layer_name, position)
+                            - 4 * globalMap_.at(elevation_layer_name, prevIdx1)
+                            + globalMap_.at(elevation_layer_name, prevIdx2)) / (2 * cell_size);
+                    variance_dz_dx = (9 * globalMap_.atPosition(elevation_variance_layer_name, position) +
+                                    16 * globalMap_.at(elevation_variance_layer_name, prevIdx1) +
+                                    globalMap_.at(elevation_variance_layer_name, prevIdx2)) /
+                                    (4 * cell_size * cell_size);
+                }
+            } else if (!globalMap_.isInside(grid_map::Position(position.x() - cell_size, position.y()))) {
+                // Left border (x-grid)
+                grid_map::Index nextIdx1, nextIdx2;
+                globalMap_.getIndex(grid_map::Position(position.x() + cell_size, position.y()), nextIdx1);
+                globalMap_.getIndex(grid_map::Position(position.x() + 2 * cell_size, position.y()), nextIdx2);
+                if (globalMap_.isValid(nextIdx1, elevation_layer_name) && globalMap_.isValid(nextIdx2, elevation_layer_name)) {
+                    dz_dx = (-3 * globalMap_.atPosition(elevation_layer_name, position)
+                            + 4 * globalMap_.at(elevation_layer_name, nextIdx1)
+                            - globalMap_.at(elevation_layer_name, nextIdx2)) / (2 * cell_size);
+                    variance_dz_dx = (9 * globalMap_.atPosition(elevation_variance_layer_name, position) +
+                                    16 * globalMap_.at(elevation_variance_layer_name, nextIdx1) +
+                                    globalMap_.at(elevation_variance_layer_name, nextIdx2)) /
+                                    (4 * cell_size * cell_size);
+                }
+            } else {
+                // Central condition
+                grid_map::Index previousIndex, nextIndex;
+                globalMap_.getIndex(grid_map::Position(position.x() + cell_size, position.y()), nextIndex);
+                globalMap_.getIndex(grid_map::Position(position.x() - cell_size, position.y()), previousIndex);
+                if (globalMap_.isValid(nextIndex, elevation_layer_name) && globalMap_.isValid(previousIndex, elevation_layer_name)) {
+                    dz_dx = (globalMap_.at(elevation_layer_name, nextIndex) - globalMap_.at(elevation_layer_name, previousIndex)) / (2 * cell_size);
+                    variance_dz_dx = (globalMap_.at(elevation_variance_layer_name, nextIndex) +
+                                    globalMap_.at(elevation_variance_layer_name, previousIndex)) /
+                                    (4 * cell_size * cell_size);
+                }
+            }
+
+            // Finite differences for calculating dz/dy and error propagation for variance
+            if (!globalMap_.isInside(grid_map::Position(position.x(), position.y() + cell_size))) {
+                // Upper border (y-grid)
+                grid_map::Index prevIdx1, prevIdx2;
+                globalMap_.getIndex(grid_map::Position(position.x(), position.y() - cell_size), prevIdx1);
+                globalMap_.getIndex(grid_map::Position(position.x(), position.y() - 2 * cell_size), prevIdx2);
+                if (globalMap_.isValid(prevIdx1, elevation_layer_name) && globalMap_.isValid(prevIdx2, elevation_layer_name)) {
+                    dz_dy = (3 * globalMap_.atPosition(elevation_layer_name, position)
+                            - 4 * globalMap_.at(elevation_layer_name, prevIdx1)
+                            + globalMap_.at(elevation_layer_name, prevIdx2)) / (2 * cell_size);
+                    variance_dz_dy = (9 * globalMap_.atPosition(elevation_variance_layer_name, position) +
+                                    16 * globalMap_.at(elevation_variance_layer_name, prevIdx1) +
+                                    globalMap_.at(elevation_variance_layer_name, prevIdx2)) /
+                                    (4 * cell_size * cell_size);
+                }
+            } else if (!globalMap_.isInside(grid_map::Position(position.x(), position.y() - cell_size))) {
+                // Lower border (y-grid)
+                grid_map::Index nextIdx1, nextIdx2;
+                globalMap_.getIndex(grid_map::Position(position.x(), position.y() + cell_size), nextIdx1);
+                globalMap_.getIndex(grid_map::Position(position.x(), position.y() + 2 * cell_size), nextIdx2);
+                if (globalMap_.isValid(nextIdx1, elevation_layer_name) && globalMap_.isValid(nextIdx2, elevation_layer_name)) {
+                    dz_dy = (-3 * globalMap_.atPosition(elevation_layer_name, position)
+                            + 4 * globalMap_.at(elevation_layer_name, nextIdx1)
+                            - globalMap_.at(elevation_layer_name, nextIdx2)) / (2 * cell_size);
+                    variance_dz_dy = (9 * globalMap_.atPosition(elevation_variance_layer_name, position) +
+                                    16 * globalMap_.at(elevation_variance_layer_name, nextIdx1) +
+                                    globalMap_.at(elevation_variance_layer_name, nextIdx2)) /
+                                    (4 * cell_size * cell_size);
+                }
+            } else {
+                // Central condition
+                grid_map::Index previousIndex, nextIdx;
+                globalMap_.getIndex(grid_map::Position(position.x(), position.y() + cell_size), nextIdx);
+                globalMap_.getIndex(grid_map::Position(position.x(), position.y() - cell_size), previousIndex);
+                if (globalMap_.isValid(nextIdx, elevation_layer_name) && globalMap_.isValid(previousIndex, elevation_layer_name)) {
+                    dz_dy = (globalMap_.at(elevation_layer_name, nextIdx) - globalMap_.at(elevation_layer_name, previousIndex)) / (2 * cell_size);
+                    variance_dz_dy = (globalMap_.at(elevation_variance_layer_name, nextIdx) +
+                                    globalMap_.at(elevation_variance_layer_name, previousIndex)) /
+                                    (4 * cell_size * cell_size);
+                }
+            }
+
+            // Normalized normal vector and combined variance
+            Eigen::Vector3d normal(-dz_dx, -dz_dy, 1.0);
+            double variance_normal = variance_dz_dx + variance_dz_dy;
+
+            normal.normalize();
+            globalMap_.atPosition(surface_orientation_x_layer_name, position) = normal.x();
+            globalMap_.atPosition(surface_orientation_y_layer_name, position) = normal.y();
+            globalMap_.atPosition(surface_orientation_z_layer_name, position) = normal.z();
+            globalMap_.atPosition(surface_orientation_variance_layer_name, position) = variance_normal;
+
+            //update obstacle detection based on maximum traversable slope
+            double slope = std::sqrt(dz_dx * dz_dx + dz_dy * dz_dy);
+            if (slope > max_slope_threshold) {
+                globalMap_.atPosition(obstacles_layer_name, position) = 100.0; // Mark as obstacle
+            } else {
+                globalMap_.atPosition(obstacles_layer_name, position) = 0.0; // Mark as free
+            }
+
+        }
+        visualization_msgs::MarkerArray markerArray = createNormalVectorMarkers();
+        surface_normal_marker_pub.publish(markerArray);
+    }
+
+    visualization_msgs::MarkerArray createNormalVectorMarkers() {
+        visualization_msgs::MarkerArray markerArray;
+        int marker_id = 0;
+
+        for (grid_map::GridMapIterator it(globalMap_); !it.isPastEnd(); ++it) {
+            grid_map::Index index(*it);
+            grid_map::Position position;
+            globalMap_.getPosition(index, position);
+
+            if (!globalMap_.isValid(index, surface_orientation_x_layer_name) || !globalMap_.isValid(index, surface_orientation_y_layer_name) || !globalMap_.isValid(index,surface_orientation_z_layer_name))
+                continue;
+
+            double x = globalMap_.at(surface_orientation_x_layer_name, index);
+            double y = globalMap_.at(surface_orientation_y_layer_name, index);
+            double z = globalMap_.at(surface_orientation_z_layer_name, index);
+
+            double elevation_value = globalMap_.atPosition(elevation_layer_name, position);
+
+            visualization_msgs::Marker marker;
+            marker.header.frame_id = grid_map_frame_id;
+            marker.header.stamp = ros::Time::now();
+            marker.ns = "gridmap_surface_normals";
+            marker.id = marker_id++;
+            marker.type = visualization_msgs::Marker::ARROW;
+            marker.action = visualization_msgs::Marker::ADD;
+
+            geometry_msgs::Point start;
+            start.x = position.x();
+            start.y = position.y();
+            start.z = elevation_value;
+            marker.points.push_back(start);
+
+            geometry_msgs::Point end;
+            end.x = position.x() + x;
+            end.y = position.y() + y;
+            end.z = elevation_value + z;
+            marker.points.push_back(end);
+
+            marker.scale.x = 0.03;
+            marker.scale.y = 0.05;
+            marker.scale.z = 0.02;
+            marker.color.a = 1.0;
+            marker.color.r = 1.0;
+            marker.color.g = 0.0;
+            marker.color.b = 0.0;
+
+            markerArray.markers.push_back(marker);
+        }
+        return markerArray;
+    }
+
+    sensor_msgs::PointCloud2 filterPointCloud(const sensor_msgs::PointCloud2::ConstPtr& cloud) {
+
+        pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+        pcl::fromROSMsg(*cloud, *pcl_cloud);
+
+        pcl::CropBox<pcl::PointXYZ> crop_box_filter;
+        crop_box_filter.setInputCloud(pcl_cloud);
+        float half_map_size  = local_map_size/2;
+
+        crop_box_filter.setMin(Eigen::Vector4f(-half_map_size, -half_map_size, -std::numeric_limits<float>::max(), 1.0));
+        crop_box_filter.setMax(Eigen::Vector4f(half_map_size, half_map_size, std::numeric_limits<float>::max(), 1.0));
+
+        pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+        crop_box_filter.filter(*filtered_cloud);
+
+        sensor_msgs::PointCloud2 filtered_cloud_msg;
+        pcl::toROSMsg(*filtered_cloud, filtered_cloud_msg);
+        filter_cloud_pub.publish(filtered_cloud_msg);
+        return filtered_cloud_msg;
     }
 
     std::list<std::tuple<geometry_msgs::PointStamped,geometry_msgs::PointStamped>> applyTransform(grid_map::GridMap& localMap, const std::string& mean_layer_name, const std::string& variance_layer_name, geometry_msgs::TransformStamped transform){
@@ -97,7 +304,7 @@ public:
 
         std::list<std::tuple<geometry_msgs::PointStamped,geometry_msgs::PointStamped>> local_global_points_mapping;
 
-        // Trasforma la mappa locale nella mappa globale
+        // Transform localmap to globalmap 
         for (grid_map::GridMapIterator it(localMap); !it.isPastEnd(); ++it) {
             const grid_map::Index index(*it);
             const float& layer_value = localMap.at(mean_layer_name, index);
@@ -113,13 +320,12 @@ public:
                 continue;
             }
 
-            // Converti la posizione locale in globale
+            // Convert local to global positions
             geometry_msgs::PointStamped localPoint, globalPoint;
             localPoint.point.x = localPosition.x();
             localPoint.point.y = localPosition.y();
             localPoint.point.z = layer_value;
 
-            // Usa la trasformazione salvata
             try {
                 tf2::doTransform(localPoint, globalPoint, transform);
                 max.point.x = std::max(max.point.x, globalPoint.point.x);
@@ -174,8 +380,6 @@ public:
             }
         }
 
-        // fillBordersWithFive(globalMap_);
-        // pub_tf(last_center_position_global_frame);
         publish_gridmap();
     }
 
@@ -257,32 +461,13 @@ public:
 
         tf2::Transform transform = odom_transform * foot2lidar_transform;
         
-        odom_transform_msg.header.stamp = msg->header.stamp;
-        odom_transform_msg.child_frame_id = msg->header.frame_id;
-        odom_transform_msg.transform = tf2::toMsg(transform);
+        gridmap_to_lidar_transform_msg.header.stamp = msg->header.stamp;
+        gridmap_to_lidar_transform_msg.child_frame_id = msg->header.frame_id;
+        gridmap_to_lidar_transform_msg.transform = tf2::toMsg(transform);
 
         pose_received = true;
     }
-
-    void costmap_callback(const nav_msgs::OccupancyGrid::ConstPtr& msg){
-        grid_map::GridMap localMap;
-        grid_map::GridMapRosConverter::fromOccupancyGrid(*msg, "obstacles", localMap);
-
-        //TODO: Genera buchi nella mappa, provare a fixare che semplifica molto.
-        //globalMap_.addDataFrom(localMap, "obstacles", true, true);
-
-        geometry_msgs::TransformStamped odom_transform_message;
-        odom_transform_message.transform.translation.x = 0.0;
-        odom_transform_message.transform.translation.y = 0.0;
-        odom_transform_message.transform.translation.z = 0.0;
-
-        odom_transform_message.transform.rotation.x = 0.0;
-        odom_transform_message.transform.rotation.y = 0.0;
-        odom_transform_message.transform.rotation.z = 0.0;
-        odom_transform_message.transform.rotation.w = 1.0;
-        updateGlobalMap(localMap, "obstacles", odom_transform_message);
-    }
-
+    
     void publish_gridmap()
     {
         globalMap_.setTimestamp(ros::Time::now().toNSec());
@@ -290,7 +475,6 @@ public:
         grid_map::GridMapRosConverter::toMessage(globalMap_, message);
         message.info.header.frame_id = grid_map_frame_id;
         grid_map_pub.publish(message);
-        //ROS_INFO("Grid map (timestamp %f) published.", message.info.header.stamp.toSec());
     }
 
     void enlargeMap(grid_map::GridMap& map, grid_map::Position& max_pos, grid_map::Position& min_pos) {
@@ -331,7 +515,7 @@ public:
         //TODO: generalizzare
 
         for (const auto& layer : newMap.getLayers()) {
-            if (layer.c_str() == elevation_variance_layer_name) newMap[layer].setConstant(1e6);
+            if (layer.c_str() == elevation_variance_layer_name || layer.c_str() == surface_orientation_variance_layer_name) newMap[layer].setConstant(1e6);
             else newMap[layer].setZero();
         }
         
@@ -396,43 +580,11 @@ public:
             odom_topic_name = "/odom";
             ROS_WARN_STREAM("Parameter [gridmap/odom_topic_name] not found. Using default value: " << odom_topic_name);
         }
-        if (! nh_.getParam("gridmap/costmap2d_topic_name",costmap2d_topic_name))
-        {
-            costmap2d_topic_name = "/costmap_2d_node/costmap/costmap";
-            ROS_WARN_STREAM("Parameter [gridmap/costmap2d_topic_name] not found. Using default value: " << costmap2d_topic_name);
-        }
         if (! nh_.getParam("gridmap/grid_map_frame_id",grid_map_frame_id))
         {
             grid_map_frame_id = "odom";
             ROS_WARN_STREAM("Parameter [gridmap/grid_map_frame_id] not found. Using default value: " << grid_map_frame_id);
         }
-        /*if (!nh_.getParam("gridmap/lidar_pose/translation/x", lidar_pose.transform.translation.x) ||
-            !nh_.getParam("gridmap/lidar_pose/translation/y", lidar_pose.transform.translation.y) ||
-            !nh_.getParam("gridmap/lidar_pose/translation/z", lidar_pose.transform.translation.z) ||
-            !nh_.getParam("gridmap/lidar_pose/rotation/x", lidar_pose.transform.rotation.x) ||
-            !nh_.getParam("gridmap/lidar_pose/rotation/y", lidar_pose.transform.rotation.y) ||
-            !nh_.getParam("gridmap/lidar_pose/rotation/z", lidar_pose.transform.rotation.z) ||
-            !nh_.getParam("gridmap/lidar_pose/rotation/w", lidar_pose.transform.rotation.w)) {
-                lidar_pose.transform.translation.x = 0;
-                lidar_pose.transform.translation.y = 0;
-                lidar_pose.transform.translation.z = 0;
-                lidar_pose.transform.rotation.x = 0;
-                lidar_pose.transform.rotation.y = 0;
-                lidar_pose.transform.rotation.z = 0;
-                lidar_pose.transform.rotation.w = 1;
-                ROS_WARN_STREAM("Parameter [gridmap/lidar_pose] not found. Using default value: " << lidar_pose);
-        }*/
-       /*  if (! nh_.getParam("gridmap/base_link_frame_id",base_link_frame_id))
-        {
-            base_link_frame_id = "base_link";
-            ROS_WARN_STREAM("Parameter [gridmap/base_link_frame_id] not found. Using default value: " << base_link_frame_id);
-        } */
-        //TODO: no needed?
-        /* if (! nh_.getParam("gridmap/base_link_frame_id_start",base_link_frame_id_start))
-        {
-            base_link_frame_id_start = "base_link_start";
-            ROS_WARN_STREAM("Parameter [gridmap/base_link_frame_id_start] not found. Using default value: " << base_link_frame_id_start);
-        } */
         if (! nh_.getParam("gridmap/lidar_frame_id",lidar_frame_id))
         {
             lidar_frame_id = "velodyne";
@@ -447,6 +599,11 @@ public:
         {
             grid_map_topic_name = "grid_map";
             ROS_WARN_STREAM("Parameter [gridmap/grid_map_topic_name] not found. Using default value: " << grid_map_topic_name);
+        }
+        if (! nh_.getParam("gridmap/max_slope_threshold",max_slope_threshold))
+        {
+            max_slope_threshold = 0.523599; //30 deg in radiant
+            ROS_WARN_STREAM("Parameter [gridmap/max_slope_threshold] not found. Using default value: " << max_slope_threshold);
         }
     }
 
@@ -468,14 +625,14 @@ private:
     ros::NodeHandle nh_;
     ros::Subscriber cloud_sub;
     ros::Subscriber odom_sub;
-    ros::Subscriber costmap_sub;
-    ros::Publisher grid_map_pub; 
+    ros::Publisher grid_map_pub;
+    ros::Publisher filter_cloud_pub;
+    ros::Publisher surface_normal_marker_pub;
     
     std::string grid_map_topic_name;
     std::string lidar_topic_name;
     std::string odom_topic_name;
-    std::string costmap2d_topic_name;
-
+    
     //GridMap attributes:
     grid_map::GridMap globalMap_;
     grid_map::Position last_center_position_global_frame;
@@ -485,6 +642,10 @@ private:
     double local_map_size;
     double cell_size;
     
+    std::string surface_orientation_x_layer_name;
+    std::string surface_orientation_y_layer_name;
+    std::string surface_orientation_z_layer_name;
+    std::string surface_orientation_variance_layer_name;
     std::string elevation_layer_name;
     std::string elevation_variance_layer_name;
     std::string obstacles_layer_name;
@@ -497,7 +658,8 @@ private:
     std::string lidar_frame_id;
     std::string foot_print_frame_id;
     tf2::Transform foot2lidar_transform;
-    geometry_msgs::TransformStamped odom_transform_msg;
+    geometry_msgs::TransformStamped gridmap_to_lidar_transform_msg;
+    double max_slope_threshold;
     
 };
 

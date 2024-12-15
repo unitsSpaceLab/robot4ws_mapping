@@ -1,12 +1,13 @@
 # map params
 grid_map_topic_name: grid_map
-cell_size: 0.2 # meters
+cell_size: 0.5 # meters
 global_map_size: 5.0 # meters
 local_map_size: 5.0 # meters
 grid_map_frame_id: Archimede_foot_start
 
 # Archimede robot params
 foot_print_frame_id: Archimede_footprint
+max_slope_threshold: 0.349066 # 20 deg in radiants
 
 # lidar params
 point_cloud_max_height_threshold: 200 # meters

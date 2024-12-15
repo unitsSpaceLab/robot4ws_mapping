@@ -16,12 +16,14 @@
   <build_depend>roscpp</build_depend>
   <build_depend>rospy</build_depend>
   <build_depend>tf</build_depend>
+  <build_depend>pcl_ros</build_depend>
   <build_export_depend>roscpp</build_export_depend>
   <build_export_depend>rospy</build_export_depend>
   <build_export_depend>tf</build_export_depend>
   <exec_depend>roscpp</exec_depend>
   <exec_depend>rospy</exec_depend>
   <exec_depend>tf</exec_depend>
+  <exec_depend>pcl_ros</exec_depend>
 
   <depend>grid_map_msgs</depend>
   <depend>grid_map_ros</depend>
@@ -29,8 +31,6 @@
   <depend>sensor_msgs</depend>
   <depend>rosbag</depend>
   <depend>tf2_ros</depend>
-  <depend>costmap_2d</depend>
-
 
   <export>
   </export>

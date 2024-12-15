@@ -67,66 +67,7 @@ public:
 
             starting_pose_set_ = true;
 
-           /*  starting_pose = tf2::Transform(rotation, translation);
-            // starting_position_ = msg->pose[index].position;
-            //starting_orientation_ = msg->pose[index].orientation; 
-
-            tf2::Matrix3x3 rot_matrix(rotation);
-            tf2::Vector3 z_axis = rot_matrix.getColumn(2); // Asse Z dell'orientamento corrente
-
-            // Calcolo angolo tra asse Z corrente e asse Z globale
-            tf2::Vector3 global_z(0.0, 0.0, 1.0);
-            double angle = acos(z_axis.dot(global_z) / (z_axis.length() * global_z.length()));
-            tf2::Vector3 axis = z_axis.cross(global_z).normalized();
-
-            // Se l'asse di rotazione è valido, corregge la rotazione
-            tf2::Quaternion correction;
-            if (axis.length() > 0.0) {
-                correction.setRotation(axis, angle);
-            } else {
-                correction = tf2::Quaternion(0.0, 0.0, 0.0, 1.0); 
-            }
-
-            // Applica la correzione all'orientamento originale
-            tf2::Quaternion aligned_rotation = correction * rotation;
-            aligned_rotation.normalize();
-
-            // Aggiorna la starting_pose
-            starting_pose.setRotation(aligned_rotation);
-
-
-            odom_msg_.pose.pose.position.x = 0.0;
-            odom_msg_.pose.pose.position.y = 0.0;
-            odom_msg_.pose.pose.position.z = 0.0;
-
-            odom_msg_.pose.pose.orientation.x = 0.0;
-            odom_msg_.pose.pose.orientation.y = 0.0;
-            odom_msg_.pose.pose.orientation.z = 0.0;
-            odom_msg_.pose.pose.orientation.w = 1.0;
-
-            odom_msg_.twist.twist.linear.x = 0.0;
-            odom_msg_.twist.twist.linear.y = 0.0;
-            odom_msg_.twist.twist.linear.z = 0.0;
-
-            odom_msg_.twist.twist.angular.x = 0.0;
-            odom_msg_.twist.twist.angular.y = 0.0;
-            odom_msg_.twist.twist.angular.z = 0.0;
-
-            starting_pose_set_ = true; */
         } else {
-            /* odom_msg_.pose.pose.position.x = pose.position.x - starting_position_.x;
-            odom_msg_.pose.pose.position.y = pose.position.y - starting_position_.y;
-            odom_msg_.pose.pose.position.z = pose.position.z - starting_position_.z;
-
-            tf2::Quaternion q_current(pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w);
-            tf2::Quaternion q_start(starting_orientation_.x, starting_orientation_.y, starting_orientation_.z, starting_orientation_.w);
-            tf2::Quaternion q_relative = q_start.inverse() * q_current;
-
-            odom_msg_.pose.pose.orientation.x = q_relative.x();
-            odom_msg_.pose.pose.orientation.y = q_relative.y();
-            odom_msg_.pose.pose.orientation.z = q_relative.z();
-            odom_msg_.pose.pose.orientation.w = q_relative.w(); */
- 
             tf2::Transform pose = tf2::Transform(rotation, translation);
             tf2::Transform relative_transform = starting_pose.inverse() * pose;
 
@@ -149,12 +90,12 @@ private:
         tf_.header.frame_id = "Archimede_foot_start";
         tf_.child_frame_id = "Archimede_footprint";
 
-        // Imposta la traslazione
+        // Translation
         tf_.transform.translation.x = msg.pose.pose.position.x;
         tf_.transform.translation.y = msg.pose.pose.position.y;
         tf_.transform.translation.z = msg.pose.pose.position.z;
 
-        // Imposta la rotazione
+        // Rotation
         tf_.transform.rotation.x = msg.pose.pose.orientation.x;
         tf_.transform.rotation.y = msg.pose.pose.orientation.y;
         tf_.transform.rotation.z = msg.pose.pose.orientation.z;
@@ -172,8 +113,6 @@ private:
     geometry_msgs::TransformStamped tf_;
 
     std::string link_name_;
-    /* geometry_msgs::Point starting_position_;
-    geometry_msgs::Quaternion starting_orientation_; */
     tf2::Transform starting_pose;
     bool starting_pose_set_;
 
