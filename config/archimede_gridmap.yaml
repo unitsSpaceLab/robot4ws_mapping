@@ -1,9 +1,11 @@
 # map params
 grid_map_topic_name: grid_map
-cell_size: 0.5 # meters
+cell_size: 0.2 # meters
 global_map_size: 5.0 # meters
 local_map_size: 5.0 # meters
 grid_map_frame_id: Archimede_foot_start
+elevation_logic: percentile # choose mean or percentile (median -> percentile 0.5)
+percentile: 0.8
 
 # Archimede robot params
 foot_print_frame_id: Archimede_footprint

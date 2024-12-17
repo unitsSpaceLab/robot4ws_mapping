@@ -15,7 +15,8 @@
 #include <pcl/filters/crop_box.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <visualization_msgs/MarkerArray.h>
-
+#include <unordered_map>
+#include <functional>
 
 class multi_layer_map{
 public:
@@ -42,7 +43,9 @@ public:
         globalMap_.add(surface_orientation_z_layer_name, 0);
         globalMap_.add(surface_orientation_variance_layer_name, 1e6);
 
-        cloud_sub = nh_.subscribe(lidar_topic_name, 10, &multi_layer_map::pointCloudCallback, this);
+        if(elevation_logic=="mean") cloud_sub = nh_.subscribe(lidar_topic_name, 10, &multi_layer_map::pointCloudCallback, this);
+        else cloud_sub = nh_.subscribe(lidar_topic_name, 10, &multi_layer_map::pointCloudCallbackPercentile, this);
+
         odom_sub = nh_.subscribe(odom_topic_name, 5, &multi_layer_map::odom_callback, this);
 
         grid_map_pub = nh_.advertise<grid_map_msgs::GridMap>(grid_map_topic_name, 1, true);
@@ -51,6 +54,87 @@ public:
 
         pose_received = false;
     }
+
+    struct IndexHash {
+        // Hash for grid_map::Index
+        std::size_t operator()(const grid_map::Index& index) const {
+            return std::hash<int>()(index.x()) ^ (std::hash<int>()(index.y()) << 1);
+        }
+    };
+
+    struct IndexEqual {
+        // Equality for grid_map::Index
+        bool operator()(const grid_map::Index& a, const grid_map::Index& b) const {
+            return a.x() == b.x() && a.y() == b.y();
+        }
+    };
+
+    void pointCloudCallbackPercentile(const sensor_msgs::PointCloud2::ConstPtr& cloud){
+        if (!pose_received) {
+            ROS_WARN("No pose data received yet");
+            return;
+        }
+
+        geometry_msgs::TransformStamped actual_transform = gridmap_to_lidar_transform_msg;
+
+        sensor_msgs::PointCloud2 filtered_cloud = filterPointCloud(cloud);
+
+        // Convert PointCloud2 to local GridMap
+        grid_map::GridMap localMap({elevation_layer_name, "cloudPoint_counter", elevation_variance_layer_name});
+        localMap.setGeometry(grid_map::Length(local_map_size, local_map_size), cell_size);
+        localMap[elevation_layer_name].setZero();
+        localMap["cloudPoint_counter"].setZero();
+        localMap[elevation_variance_layer_name].setConstant(1e6);
+
+        // Unordered map to store values for percentile computation
+        std::unordered_map<grid_map::Index, std::vector<double>, IndexHash, IndexEqual> cell_values;
+
+        for (sensor_msgs::PointCloud2ConstIterator<float> iter_x(filtered_cloud, "x"), iter_y(filtered_cloud, "y"), iter_z(filtered_cloud, "z");
+                iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z)
+        {
+            if (std::isnan(*iter_x) || std::isnan(*iter_y) || std::isnan(*iter_z)) {
+                ROS_WARN("Skipping cloud point with NaN value: x = %f, y = %f, z = %f", *iter_x, *iter_y, *iter_z);
+                continue;
+            }
+
+            // Skip cloud points above the height threshold
+            if(*iter_z > pc_height_threshold) continue;
+
+            grid_map::Position position(*iter_x, *iter_y);
+            if (localMap.isInside(position)) {
+                grid_map::Index index;
+                localMap.getIndex(position, index);
+                cell_values[index].push_back(*iter_z);
+            }
+        }
+
+        // Process each cell to compute the percentile
+        for (const auto& cell : cell_values) {
+            const grid_map::Index& index = cell.first;
+            std::vector<double> values = cell.second;
+
+            // Sort values to compute percentile
+            std::sort(values.begin(), values.end());
+            size_t n = values.size();
+
+            // Compute the i-th percentile index
+            size_t percentile_index = static_cast<size_t>(percentile * (n - 1));
+            double percentile_value = values[percentile_index];
+
+            // Update GridMap with the percentile value
+            grid_map::Position position;
+            localMap.getPosition(index, position);
+            localMap.at(elevation_layer_name, index) = percentile_value;
+            localMap.at(elevation_variance_layer_name, index) = lidar_variance; // Set variance to a constant
+            localMap.at("cloudPoint_counter", index) = n; // Store number of points in the cell
+        }
+
+        std::list<std::tuple<geometry_msgs::PointStamped,geometry_msgs::PointStamped>> transformed_point_tuple_list = applyTransform(localMap, elevation_layer_name, elevation_variance_layer_name, actual_transform);
+        updateGlobalMapKalman(localMap, elevation_layer_name, elevation_variance_layer_name, actual_transform, transformed_point_tuple_list);
+
+        // Update surface normals
+        update_surface_orientation(transformed_point_tuple_list);
+    } 
 
     void pointCloudCallback(const sensor_msgs::PointCloud2::ConstPtr& cloud){
 
@@ -605,6 +689,18 @@ public:
             max_slope_threshold = 0.523599; //30 deg in radiant
             ROS_WARN_STREAM("Parameter [gridmap/max_slope_threshold] not found. Using default value: " << max_slope_threshold);
         }
+        if (! nh_.getParam("gridmap/elevation_logic",elevation_logic))
+        {
+            elevation_logic = "mean";
+            ROS_WARN_STREAM("Parameter [gridmap/elevation_logic] not found. Using default value: " << elevation_logic);
+        }
+        if(elevation_logic == "percentile"){
+            if (! nh_.getParam("gridmap/percentile",percentile))
+            {
+                percentile = 0.8;
+                ROS_WARN_STREAM("Parameter [gridmap/percentile] not found. Using default value: " << percentile);
+            }
+        }
     }
 
     void load_robot_static_tf(){
@@ -641,6 +737,9 @@ private:
     double global_map_size;
     double local_map_size;
     double cell_size;
+    double percentile;
+
+    std::string elevation_logic;
     
     std::string surface_orientation_x_layer_name;
     std::string surface_orientation_y_layer_name;
