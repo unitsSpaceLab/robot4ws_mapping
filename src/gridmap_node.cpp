@@ -49,7 +49,6 @@ public:
         odom_sub = nh_.subscribe(odom_topic_name, 5, &multi_layer_map::odom_callback, this);
 
         grid_map_pub = nh_.advertise<grid_map_msgs::GridMap>(grid_map_topic_name, 1, true);
-        filter_cloud_pub = nh_.advertise<sensor_msgs::PointCloud2>("Archimede/velodyne_points_filtered", 1, true);
         surface_normal_marker_pub = nh_.advertise<visualization_msgs::MarkerArray>("surface_normal", 1);
 
         pose_received = false;
@@ -77,8 +76,6 @@ public:
 
         geometry_msgs::TransformStamped actual_transform = gridmap_to_lidar_transform_msg;
 
-        sensor_msgs::PointCloud2 filtered_cloud = filterPointCloud(cloud);
-
         // Convert PointCloud2 to local GridMap
         grid_map::GridMap localMap({elevation_layer_name, "cloudPoint_counter", elevation_variance_layer_name});
         localMap.setGeometry(grid_map::Length(local_map_size, local_map_size), cell_size);
@@ -89,7 +86,7 @@ public:
         // Unordered map to store values for percentile computation
         std::unordered_map<grid_map::Index, std::vector<double>, IndexHash, IndexEqual> cell_values;
 
-        for (sensor_msgs::PointCloud2ConstIterator<float> iter_x(filtered_cloud, "x"), iter_y(filtered_cloud, "y"), iter_z(filtered_cloud, "z");
+        for (sensor_msgs::PointCloud2ConstIterator<float> iter_x(*cloud, "x"), iter_y(*cloud, "y"), iter_z(*cloud, "z");
                 iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z)
         {
             if (std::isnan(*iter_x) || std::isnan(*iter_y) || std::isnan(*iter_z)) {
@@ -145,8 +142,6 @@ public:
 
         geometry_msgs::TransformStamped actual_transform = gridmap_to_lidar_transform_msg;
 
-        sensor_msgs::PointCloud2 filtered_cloud = filterPointCloud(cloud);
-
         // Convert PointCloud2 to local GridMap
         grid_map::GridMap localMap({elevation_layer_name, "cloudPoint_counter", elevation_variance_layer_name});
         localMap.setGeometry(grid_map::Length(local_map_size, local_map_size), cell_size);
@@ -154,7 +149,7 @@ public:
         localMap["cloudPoint_counter"].setZero();
         localMap[elevation_variance_layer_name].setConstant(1e6);
 
-        for (sensor_msgs::PointCloud2ConstIterator<float> iter_x(filtered_cloud, "x"), iter_y(filtered_cloud, "y"), iter_z(filtered_cloud, "z");
+        for (sensor_msgs::PointCloud2ConstIterator<float> iter_x(*cloud, "x"), iter_y(*cloud, "y"), iter_z(*cloud, "z");
                 iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z)
         {
             if (std::isnan(*iter_x) || std::isnan(*iter_y) || std::isnan(*iter_z)) {
@@ -356,27 +351,6 @@ public:
             markerArray.markers.push_back(marker);
         }
         return markerArray;
-    }
-
-    sensor_msgs::PointCloud2 filterPointCloud(const sensor_msgs::PointCloud2::ConstPtr& cloud) {
-
-        pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-        pcl::fromROSMsg(*cloud, *pcl_cloud);
-
-        pcl::CropBox<pcl::PointXYZ> crop_box_filter;
-        crop_box_filter.setInputCloud(pcl_cloud);
-        float half_map_size  = local_map_size/2;
-
-        crop_box_filter.setMin(Eigen::Vector4f(-half_map_size, -half_map_size, -std::numeric_limits<float>::max(), 1.0));
-        crop_box_filter.setMax(Eigen::Vector4f(half_map_size, half_map_size, std::numeric_limits<float>::max(), 1.0));
-
-        pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-        crop_box_filter.filter(*filtered_cloud);
-
-        sensor_msgs::PointCloud2 filtered_cloud_msg;
-        pcl::toROSMsg(*filtered_cloud, filtered_cloud_msg);
-        filter_cloud_pub.publish(filtered_cloud_msg);
-        return filtered_cloud_msg;
     }
 
     std::list<std::tuple<geometry_msgs::PointStamped,geometry_msgs::PointStamped>> applyTransform(grid_map::GridMap& localMap, const std::string& mean_layer_name, const std::string& variance_layer_name, geometry_msgs::TransformStamped transform){
@@ -654,10 +628,15 @@ public:
             lidar_variance = 0.2;
             ROS_WARN_STREAM("Parameter [gridmap/lidar_variance] not found. Using default value: " << lidar_variance);
         }
-        if (! nh_.getParam("gridmap/lidar_topic_name",lidar_topic_name))
+        /* if (! nh_.getParam("gridmap/lidar_topic_name",lidar_topic_name))
         {
             lidar_topic_name = "/velodyne";
             ROS_WARN_STREAM("Parameter [gridmap/lidar_topic_name] not found. Using default value: " << lidar_topic_name);
+        } */
+        if (! nh_.getParam("gridmap/pc2_filtered_topic_name",lidar_topic_name))
+        {
+            lidar_topic_name = "/velodyne_filtered";
+            ROS_WARN_STREAM("Parameter [gridmap/pc2_filtered_topic_name] not found. Using default value: " << lidar_topic_name);
         }
         if (! nh_.getParam("gridmap/odom_topic_name",odom_topic_name))
         {
@@ -722,7 +701,6 @@ private:
     ros::Subscriber cloud_sub;
     ros::Subscriber odom_sub;
     ros::Publisher grid_map_pub;
-    ros::Publisher filter_cloud_pub;
     ros::Publisher surface_normal_marker_pub;
     
     std::string grid_map_topic_name;

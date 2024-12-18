@@ -15,8 +15,20 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   tf
   pcl_ros
+  message_generation
 )
 
+add_message_files(
+  FILES
+  GridMapUpdateMsg.msg
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+  nav_msgs
+  grid_map_msgs
+)
 
 catkin_package(
 #  INCLUDE_DIRS include
@@ -38,6 +50,9 @@ install(
 
 add_executable(gridmap_node src/gridmap_node.cpp)
 target_link_libraries(gridmap_node ${catkin_LIBRARIES})
+
+add_executable(cloud_filter_node src/cloud_filter_node.cpp)
+target_link_libraries(cloud_filter_node ${catkin_LIBRARIES})
 
 add_executable(link_states_to_odom_node src/link_states_to_odom_node.cpp)
 target_link_libraries(link_states_to_odom_node ${catkin_LIBRARIES})

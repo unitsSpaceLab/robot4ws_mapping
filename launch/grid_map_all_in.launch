@@ -19,6 +19,9 @@
   <arg name="p38_env" default="/home/ros/p38Env/bin/python3.8"/>
   <arg name="add_velodyneHDL32E" default="true"/>
 
+  <!-- include_color_detection arguments -->
+  <arg name="include_color_detection" default="false"/>
+
   <!-- link_state_to_odom node argument -->
   <arg name="include_linkstates2odom" default="false"/>
 
@@ -29,6 +32,7 @@
   <!-- grid_map stuffs -->
   <rosparam command="load" file="$(find robot4ws_mapping)/config/$(arg gridmap_config_file)" ns="gridmap"/>
 
+  <node name="cloud_filter_node" pkg="robot4ws_mapping" type="cloud_filter_node" output="screen" />
   <node name="p2g_listener" pkg="robot4ws_mapping" type="gridmap_node" output="screen"/>
 
   <node name="rviz" pkg="rviz" type="rviz" args="-d $(find robot4ws_mapping)/rviz/grid_map.rviz" />
@@ -61,6 +65,11 @@
   <!-- include play bag -->
   <group if="$(arg include_bag)">
     <node pkg="rosbag" type="play" name="rosbag_play" args="$(arg bag_file)" output="screen"/>
+  </group>
+
+  <!-- include link_state_to_odom -->
+  <group if="$(arg include_color_detection)">
+    <include file="$(find robot4ws_perception)/launch/color_detection.launch"/>
   </group>
 
 </launch>

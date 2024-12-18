@@ -18,5 +18,6 @@ lidar_frame_id: Archimede_velodyne
 
 # ros topics params
 lidar_topic_name: /Archimede/velodyne_points
+pc2_filtered_topic_name: Archimede/velodyne_points_filtered
 odom_topic_name: /gazebo_2_odom
 costmap2d_topic_name: /costmap_2d_node/costmap/costmap
