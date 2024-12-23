@@ -16,6 +16,7 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   pcl_ros
   message_generation
+  message_runtime
 )
 
 add_message_files(
@@ -48,11 +49,23 @@ install(
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 )
 
-add_executable(gridmap_node src/gridmap_node.cpp)
-target_link_libraries(gridmap_node ${catkin_LIBRARIES})
+# add_executable(gridmap_node src/gridmap_node.cpp)
+# target_link_libraries(gridmap_node ${catkin_LIBRARIES})
+
+add_executable(multi_layer_map_node src/multi_layer_map_node.cpp)
+target_link_libraries(multi_layer_map_node ${catkin_LIBRARIES})
 
 add_executable(cloud_filter_node src/cloud_filter_node.cpp)
 target_link_libraries(cloud_filter_node ${catkin_LIBRARIES})
+
+add_executable(elevation_node src/elevation_node.cpp)
+target_link_libraries(elevation_node ${catkin_LIBRARIES})
+
+add_executable(surface_orientation_node src/surface_orientation_node.cpp)
+target_link_libraries(surface_orientation_node ${catkin_LIBRARIES})
+
+add_executable(obstacles_node src/obstacles_node.cpp)
+target_link_libraries(obstacles_node ${catkin_LIBRARIES})
 
 add_executable(link_states_to_odom_node src/link_states_to_odom_node.cpp)
 target_link_libraries(link_states_to_odom_node ${catkin_LIBRARIES})

@@ -429,7 +429,7 @@ public:
 
                 float updated_elevation = global_elevation + kalman_gain * (local_elevation - global_elevation);
                 float updated_variance = (1 - kalman_gain) * global_variance;
-
+                
                 globalMap_.atPosition(mean_layer_name, globalPosition) = updated_elevation;
                 globalMap_.atPosition(variance_layer_name, globalPosition) = updated_variance;
             }
@@ -536,11 +536,10 @@ public:
     }
 
     void enlargeMap(grid_map::GridMap& map, grid_map::Position& max_pos, grid_map::Position& min_pos) {
-        // Ottieni i limiti attuali della mappa
+
         grid_map::Length currentLength = map.getLength();
         grid_map::Position currentPosition = map.getPosition();
 
-        //arrotondiamo rispetto la grid_cell: per difetto le celle negative e per eccesso quelle positive
         if(!(std::fmod(min_pos.x(), cell_size) == 0)){
             min_pos.x() = floor(min_pos.x() / cell_size) * cell_size;
         }
@@ -554,19 +553,16 @@ public:
             max_pos.y() = ceil(max_pos.y() / cell_size) * cell_size;
         }
 
-        // Calcola i nuovi limiti
-        double newMinX = std::min(min_pos.x(), currentPosition.x() - currentLength.x() / 2.0);
-        double newMaxX = std::max(max_pos.x(), currentPosition.x() + currentLength.x() / 2.0);
-        double newMinY = std::min(min_pos.y(), currentPosition.y() - currentLength.y() / 2.0);
-        double newMaxY = std::max(max_pos.y(), currentPosition.y() + currentLength.y() / 2.0);
+        double newMinX = std::min(min_pos.x() - cell_size/2, currentPosition.x() - currentLength.x() / 2.0);
+        double newMaxX = std::max(max_pos.x() + cell_size/2, currentPosition.x() + currentLength.x() / 2.0);
+        double newMinY = std::min(min_pos.y() - cell_size/2, currentPosition.y() - currentLength.y() / 2.0);
+        double newMaxY = std::max(max_pos.y() + cell_size/2, currentPosition.y() + currentLength.y() / 2.0);
 
-        
         double newLengthX = newMaxX - newMinX;
         double newLengthY = newMaxY - newMinY;
         grid_map::Length newLength(newLengthX, newLengthY);
         grid_map::Position newPosition((newMinX + newMaxX) / 2.0, (newMinY + newMaxY) / 2.0);
 
-        // Crea una nuova mappa con i nuovi limiti
         grid_map::GridMap newMap = grid_map::GridMap(map.getLayers());
         newMap.setGeometry(newLength, map.getResolution(), newPosition);
 
@@ -577,7 +573,6 @@ public:
             else newMap[layer].setZero();
         }
         
-        // Copia i dati dalla vecchia mappa alla nuova
         for (grid_map::GridMapIterator iterator(map); !iterator.isPastEnd(); ++iterator) {
             grid_map::Position oldPosition;
             map.getPosition(*iterator, oldPosition);
@@ -591,7 +586,6 @@ public:
         }
 
         last_center_position_global_frame = newPosition;
-        // Aggiorna la mappa originale
         map = newMap;
 
         for (const auto& layer : map.getLayers()) {

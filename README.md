@@ -4,4 +4,3 @@
 
 ## Dependencies
 GridMap
-Costmap2d

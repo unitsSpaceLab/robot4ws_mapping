@@ -1,0 +1,3 @@
+std_msgs/Header header
+grid_map_msgs/GridMap local_gridmap
+nav_msgs/Odometry odom

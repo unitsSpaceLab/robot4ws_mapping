@@ -32,8 +32,12 @@
   <!-- grid_map stuffs -->
   <rosparam command="load" file="$(find robot4ws_mapping)/config/$(arg gridmap_config_file)" ns="gridmap"/>
 
-  <node name="cloud_filter_node" pkg="robot4ws_mapping" type="cloud_filter_node" output="screen" />
-  <node name="p2g_listener" pkg="robot4ws_mapping" type="gridmap_node" output="screen"/>
+  <node name="cloud_filter_node" pkg="robot4ws_mapping" type="cloud_filter_node" output="screen"/>
+  <!--<node name="p2g_listener" pkg="robot4ws_mapping" type="gridmap_node" output="screen"/> -->
+  <node name="multi_layer_map_node" pkg="robot4ws_mapping" type="multi_layer_map_node" output="screen"/>
+  <node name="elevation_node" pkg="robot4ws_mapping" type="elevation_node" output="screen"/>
+  <node name="surface_orientation_node" pkg="robot4ws_mapping" type="surface_orientation_node" output="screen"/>
+  <node name="obstacles_node" pkg="robot4ws_mapping" type="obstacles_node" output="screen" />
 
   <node name="rviz" pkg="rviz" type="rviz" args="-d $(find robot4ws_mapping)/rviz/grid_map.rviz" />
 
