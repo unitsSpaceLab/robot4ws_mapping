@@ -1,16 +1,17 @@
 #include <ros/ros.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/point_cloud2_iterator.h>
 #include <grid_map_ros/grid_map_ros.hpp>
 #include <grid_map_msgs/GridMap.h>
 #include <geometry_msgs/TransformStamped.h>
 #include <unordered_map>
 #include <vector>
 #include <algorithm>
-#include <sensor_msgs/point_cloud2_iterator.h>
 #include <geometry_msgs/PointStamped.h>
 #include <list>
 #include <tuple>
 #include <robot4ws_mapping/GridMapUpdateMsg.h>
+#include "robot4ws_mapping/utilities.hpp"
 
 class ElevationMap
 {
@@ -45,7 +46,7 @@ public:
         localMap[cloudPoint_counter_layer_name].setZero();
         localMap[elevation_variance_layer_name].setConstant(1e6);
 
-        std::unordered_map<grid_map::Index, std::vector<double>, IndexHash, IndexEqual> cell_values;
+        std::unordered_map<grid_map::Index, std::vector<double>, robot4ws_mapping::IndexHash, robot4ws_mapping::IndexEqual> cell_values;
 
         for (sensor_msgs::PointCloud2ConstIterator<float> iter_x(*cloud, "x"), iter_y(*cloud, "y"), iter_z(*cloud, "z");
                 iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z)
@@ -236,18 +237,6 @@ private:
             ROS_WARN_STREAM("Parameter [gridmap/elevation_variance_layer_name] not found. Using default value: " << elevation_variance_layer_name);
         }
     }
-
-    struct IndexHash {
-        size_t operator()(const grid_map::Index& index) const {
-            return std::hash<int>()(index(0)) ^ std::hash<int>()(index(1));
-        }
-    };
-
-    struct IndexEqual {
-        bool operator()(const grid_map::Index& lhs, const grid_map::Index& rhs) const {
-            return lhs(0) == rhs(0) && lhs(1) == rhs(1);
-        }
-    };
 };
 
 int main(int argc, char** argv)

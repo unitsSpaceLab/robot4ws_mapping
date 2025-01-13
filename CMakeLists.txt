@@ -17,6 +17,7 @@ find_package(catkin REQUIRED COMPONENTS
   pcl_ros
   message_generation
   message_runtime
+  robot4ws_msgs
 )
 
 add_message_files(
@@ -32,14 +33,15 @@ generate_messages(
 )
 
 catkin_package(
-#  INCLUDE_DIRS include
+  INCLUDE_DIRS include
+  CATKIN_DEPENDS roscpp std_msgs nav_msgs grid_map_msgs robot4ws_msgs
 #  LIBRARIES robot4ws_mapping
 #  CATKIN_DEPENDS roscpp rospy
 #  DEPENDS system_lib
 )
 
 include_directories(
-# include
+  include
   ${catkin_INCLUDE_DIRS}
 )
 
@@ -67,8 +69,14 @@ target_link_libraries(surface_orientation_node ${catkin_LIBRARIES})
 add_executable(obstacles_node src/obstacles_node.cpp)
 target_link_libraries(obstacles_node ${catkin_LIBRARIES})
 
+add_executable(color_detection_node src/color_detection_node.cpp)
+target_link_libraries(color_detection_node ${catkin_LIBRARIES})
+
 add_executable(link_states_to_odom_node src/link_states_to_odom_node.cpp)
 target_link_libraries(link_states_to_odom_node ${catkin_LIBRARIES})
+
+add_executable(slip_node src/slip_node.cpp)
+target_link_libraries(slip_node ${catkin_LIBRARIES})
 
 
 

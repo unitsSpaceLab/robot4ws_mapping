@@ -17,10 +17,23 @@ surface_orientation_x_layer_name: surface_orientation_x
 surface_orientation_y_layer_name: surface_orientation_y
 surface_orientation_z_layer_name: surface_orientation_z
 surface_orientation_variance_layer_name: surface_orientation_variance
+color:
+  color_layer_name: color
+  color_confidence_layer_name: color_confidence
+  height_threshold: 0.1
+  area_threshold: 0.25
+slip:
+  slip_layer_name: slip
+  slip_longitudinal_vertical_axis_layer_name: slip_longitudinal_vertical_axis
+  slip_longitudinal_horizontal_axis_layer_name: slip_longitudinal_horizontal_axis
+  slip_trasversal_vertical_axis_layer_name: slip_trasversal_vertical_axis
+  slip_trasversal_horizontal_axis_layer_name: slip_trasversal_horizontal_axis
+  
 
 # Archimede robot params
 foot_print_frame_id: Archimede_footprint
 max_slope_threshold: 0.349066 # 20 deg in radiants
+camera_frame_id: rs_d435i_depth_optical_frame
 
 # lidar params
 point_cloud_max_height_threshold: 200 # meters
@@ -34,3 +47,5 @@ odom_topic_name: /gazebo_2_odom
 grid_map_update_topic_name: /grid_map_update
 grid_map_topic_name: /grid_map
 grid_map_global_update_topic_name: /grid_map_global_update
+color_detection_topic_name: /color_detection/detections3d #/color_detection/points 
+filtered_colored_cloud_topic_name: /color_detection/filtered_points

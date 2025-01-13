@@ -38,7 +38,8 @@
   <node name="elevation_node" pkg="robot4ws_mapping" type="elevation_node" output="screen"/>
   <node name="surface_orientation_node" pkg="robot4ws_mapping" type="surface_orientation_node" output="screen"/>
   <node name="obstacles_node" pkg="robot4ws_mapping" type="obstacles_node" output="screen" />
-
+  <node name="slip_node" pkg="robot4ws_mapping" type="slip_node" output="screen" />
+  
   <node name="rviz" pkg="rviz" type="rviz" args="-d $(find robot4ws_mapping)/rviz/grid_map.rviz" />
 
   <!-- include archimede_gazebo -->
@@ -75,6 +76,8 @@
   <group if="$(arg include_color_detection)">
     <include file="$(find robot4ws_perception)/launch/color_detection.launch"/>
   </group>
+
+  <node name="color_detection_node" pkg="robot4ws_mapping" type="color_detection_node" output="screen" />
 
 </launch>
 

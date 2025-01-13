@@ -9,19 +9,28 @@
 
 class LinkStates2Odom {
 public:
-    LinkStates2Odom() {
+    LinkStates2Odom(): publish_rate_(10.0){
         link_name_ = "Archimede::Archimede_base_link";
 
         //ROS node init
-        odom_pub_ = nh_.advertise<nav_msgs::Odometry>("/gazebo_2_odom", 10);
-        link_states_sub_ = nh_.subscribe("/gazebo/link_states", 10, &LinkStates2Odom::linkStatesCallback, this);
+        odom_pub_ = nh_.advertise<nav_msgs::Odometry>("/gazebo_2_odom", 1);
+        link_states_sub_ = nh_.subscribe("/gazebo/link_states", 1, &LinkStates2Odom::linkStatesCallback, this);
 
         odom_msg_.header.frame_id = "Archimede_base_link";
 
         starting_pose_set_ = false;
+        last_publish_time_ = ros::Time(0);
     }
 
-    void linkStatesCallback(const gazebo_msgs::LinkStates::ConstPtr& msg) {
+    void linkStatesCallback(const gazebo_msgs::LinkStates::ConstPtr& msg){
+
+        ros::Time current_time = ros::Time::now();
+
+        if ((current_time - last_publish_time_).toSec() < (1.0 / publish_rate_)) {
+            return;
+        }
+
+        odom_msg_.header.stamp = current_time;
         odom_msg_.header.stamp = ros::Time::now();
         auto it = std::find(msg->name.begin(), msg->name.end(), link_name_);
         if (it == msg->name.end()) {
@@ -33,7 +42,11 @@ public:
         const auto& msg_pose = msg->pose[index];
         tf2::Vector3 translation(msg_pose.position.x, msg_pose.position.y, msg_pose.position.z);
         tf2::Quaternion rotation(msg_pose.orientation.x, msg_pose.orientation.y, msg_pose.orientation.z, msg_pose.orientation.w);
-            
+
+        const auto& msg_twist = msg->twist[index];
+        tf2::Vector3 linear_velocity(msg_twist.linear.x, msg_twist.linear.y, msg_twist.linear.z);
+        tf2::Vector3 angular_velocity(msg_twist.angular.x, msg_twist.angular.y, msg_twist.angular.z);
+        
         if (!starting_pose_set_) {
             
             //set z_axis aligned to gravity (gazebo reference frame)
@@ -78,6 +91,16 @@ public:
             odom_msg_.pose.pose.orientation.y = relative_transform.getRotation().y();
             odom_msg_.pose.pose.orientation.z = relative_transform.getRotation().z();
             odom_msg_.pose.pose.orientation.w = relative_transform.getRotation().w();
+
+            tf2::Vector3 relative_linear_velocity = pose.inverse().getBasis() * linear_velocity;
+            tf2::Vector3 relative_angular_velocity = pose.inverse().getBasis() * angular_velocity;
+
+            odom_msg_.twist.twist.linear.x = relative_linear_velocity.x();
+            odom_msg_.twist.twist.linear.y = relative_linear_velocity.y();
+            odom_msg_.twist.twist.linear.z = relative_linear_velocity.z();
+            odom_msg_.twist.twist.angular.x = relative_angular_velocity.x();
+            odom_msg_.twist.twist.angular.y = relative_angular_velocity.y();
+            odom_msg_.twist.twist.angular.z = relative_angular_velocity.z();
         }
 
         odom_pub_.publish(odom_msg_);
@@ -116,7 +139,8 @@ private:
     tf2::Transform starting_pose;
     bool starting_pose_set_;
 
-    double link_height;
+    double publish_rate_; // Frequenza di pubblicazione in Hz
+    ros::Time last_publish_time_; // Tempo dell'ultima pubblicazione
 };
 
 int main(int argc, char** argv) {
