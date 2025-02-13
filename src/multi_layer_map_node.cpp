@@ -6,7 +6,10 @@
 #include <grid_map_ros/grid_map_ros.hpp>
 #include <grid_map_msgs/GridMap.h>
 #include <grid_map_ros/GridMapRosConverter.hpp>
+
 #include <robot4ws_mapping/GridMapUpdateMsg.h>
+#include <robot4ws_mapping/get_surface_normal.h>
+#include <robot4ws_msgs/SlipUpdate.h>
 
 #include <geometry_msgs/TransformStamped.h>
 #include <geometry_msgs/PointStamped.h>
@@ -21,20 +24,25 @@
 class MultiLayerMapNode
 {
 public:
-    MultiLayerMapNode(){   
+    MultiLayerMapNode(){
         load_params();
+        init_slip_layers();
         load_robot_static_tf();
         initial_variance = 100;
 
         init_global_map();
 
         pub_grid_map_update_sub = nh_.subscribe(grid_map_update_topic_name, 10, &MultiLayerMapNode::grid_map_update_callback, this);
+        slip_sub = nh_.subscribe(slip_update_topic_name, 10, &MultiLayerMapNode::slip_callback, this);
 
         grid_map_pub = nh_.advertise<grid_map_msgs::GridMap>(grid_map_topic_name, 1, true);
         grid_map_global_update_pub = nh_.advertise<robot4ws_mapping::GridMapUpdateMsg>(grid_map_global_update_topic_name, 1, true);
         image_pub_ = nh_.advertise<sensor_msgs::Image>("grid_map_image", 1);
+
+
+        surface_normal_srv = nh_.advertiseService("get_surface_normal", &MultiLayerMapNode::handle_surface_normal_request, this);
     }
-    
+
     void grid_map_update_callback(const robot4ws_mapping::GridMapUpdateMsg::ConstPtr& msg){
 
         grid_map::GridMap local_map;
@@ -72,32 +80,55 @@ public:
         message.info.header.frame_id = grid_map_frame_id;
         grid_map_pub.publish(message);
     }
-    
+
+    void slip_callback(const robot4ws_msgs::SlipUpdate::ConstPtr& msg) {
+        grid_map::Index map_index(msg->map_cell_x, msg->map_cell_y);
+        
+        std_msgs::Float32MultiArray longitudinal_coeffs = msg->longitudinal_coeffs;       
+        std_msgs::Float32MultiArray trasversal_coeffs = msg->trasversal_coeffs;
+
+        for (int i = 0; i < slip_polynomial_degree; ++i) {
+            globalMap_.at(slip_layer_names[i], map_index) = longitudinal_coeffs.data[i];
+        }
+
+        for (int i = 0; i < slip_angle_polynomial_degree; ++i) {
+            globalMap_.at(slip_angle_layer_names[i], map_index) = trasversal_coeffs.data[i];
+        }
+    }
+
 private:
     ros::NodeHandle nh_;
-    ros::Subscriber odom_sub;
     ros::Subscriber pub_grid_map_update_sub;
+
+    ros::Subscriber slip_sub;
     ros::Publisher grid_map_pub;
     ros::Publisher grid_map_global_update_pub;
     ros::Publisher image_pub_;
+
+    ros::ServiceServer surface_normal_srv;
 
     //GridMap attributes:
     grid_map::GridMap globalMap_;
     grid_map::Position last_center_position_global_frame;
     std::string grid_map_frame_id;
-    
+
     double global_map_size, local_map_size;
     double cell_size, initial_variance;
-    
+
+    double slip_angle_polynomial_degree, slip_polynomial_degree;
+
     //Layer names
     std::string elevation_layer_name, elevation_variance_layer_name;
     std::string cloudPoint_counter_layer_name, color_layer_name;
     std::string obstacles_layer_name, obstacles_variance_layer_name, surface_orientation_layer_name;
     std::string surface_orientation_x_layer_name, surface_orientation_y_layer_name, surface_orientation_z_layer_name, surface_orientation_variance_layer_name;
+    std::string slip_layer_name, slip_angle_layer_name;
+    std::vector<std::string> slip_layer_names;
+    std::vector<std::string> slip_angle_layer_names;
 
     //Topics
-    std::string odom_topic_name, grid_map_update_topic_name, grid_map_topic_name, grid_map_global_update_topic_name;
-    
+    std::string slip_update_topic_name, grid_map_update_topic_name, grid_map_topic_name, grid_map_global_update_topic_name;
+
     nav_msgs::Odometry actual_odom_msg;
 
     //Color map counter
@@ -107,7 +138,7 @@ private:
     std::string lidar_frame_id;
     std::string foot_print_frame_id;
     tf2::Transform foot2lidar_transform;
-    
+
     void load_params(){
         //load gridmap params
         if (! nh_.getParam("gridmap/grid_map_frame_id",grid_map_frame_id))
@@ -187,12 +218,29 @@ private:
             ROS_WARN_STREAM("Parameter [gridmap/color_layer_name] not found. Using default value: " << color_layer_name);
         }
 
-        //load topic names
-        if (! nh_.getParam("gridmap/odom_topic_name",odom_topic_name))
+        // Slip curves coefficients
+        if (!nh_.getParam("gridmap/slip/slip_angle_layer_name",slip_angle_layer_name))
         {
-            odom_topic_name = "/odom";
-            ROS_WARN_STREAM("Parameter [gridmap/odom_topic_name] not found. Using default value: " << odom_topic_name);
+            slip_angle_layer_name = "slip_angle";
+            ROS_WARN_STREAM("Parameter [gridmap/slip/slip_angle_layer_name] not found. Using default value: " << slip_angle_layer_name);
         }
+        if (!nh_.getParam("gridmap/slip/slip_layer_name",slip_layer_name))
+        {
+            slip_layer_name = "slip";
+            ROS_WARN_STREAM("Parameter [gridmap/slip/slip_layer_name] not found. Using default value: " << slip_layer_name);
+        }
+        if (!nh_.getParam("gridmap/slip/slip_polynomial_degree",slip_polynomial_degree))
+        {
+            slip_polynomial_degree = 4;
+            ROS_WARN_STREAM("Parameter [gridmap/slip/slip_polynomial_degree] not found. Using default value: " << slip_polynomial_degree);
+        }
+        if (!nh_.getParam("gridmap/slip/slip_angle_polynomial_degree",slip_angle_polynomial_degree))
+        {
+            slip_angle_polynomial_degree = 3;
+            ROS_WARN_STREAM("Parameter [gridmap/slip/slip_angle_polynomial_degree] not found. Using default value: " << slip_angle_polynomial_degree);
+        }
+       
+        //load topic names
         if (! nh_.getParam("gridmap/grid_map_update_topic_name",grid_map_update_topic_name))
         {
             grid_map_update_topic_name = "grid_map_update";
@@ -207,7 +255,12 @@ private:
         {
             grid_map_global_update_topic_name = "grid_map_global_update";
             ROS_WARN_STREAM("Parameter [gridmap/grid_map_global_update_topic_name] not found. Using default value: " << grid_map_global_update_topic_name);
-        } 
+        }
+        if (! nh_.getParam("gridmap/slip_update_topic_name",slip_update_topic_name))
+        {
+            slip_update_topic_name = "slip_update";
+            ROS_WARN_STREAM("Parameter [gridmap/slip_update_topic_name] not found. Using default value: " << slip_update_topic_name);
+        }
 
         //load robot related params
         if (! nh_.getParam("gridmap/lidar_frame_id",lidar_frame_id))
@@ -221,7 +274,7 @@ private:
             ROS_WARN_STREAM("Parameter [gridmap/foot_print_frame_id] not found. Using default value: " << foot_print_frame_id);
         }
     }
-    
+
     void init_global_map(){
         globalMap_.setFrameId(grid_map_frame_id);
         globalMap_.setGeometry(grid_map::Length(global_map_size, global_map_size), cell_size);
@@ -238,9 +291,14 @@ private:
         globalMap_.add(surface_orientation_variance_layer_name, initial_variance);
 
         globalMap_.add(color_layer_name, robot4ws_mapping::Unknown);
-        /* globalMap_.add("red", 0.0);
-        globalMap_.add("green", 0.0);
-        globalMap_.add("blue", 0.0); */
+
+        for (const auto& name : slip_layer_names) {
+            globalMap_.add(name, 0);
+        }
+
+        for (const auto& name : slip_angle_layer_names) {
+            globalMap_.add(name, 0);
+        }
     }
 
     void load_robot_static_tf(){
@@ -256,6 +314,32 @@ private:
         }
     }
 
+    void init_slip_layers(){
+        
+        slip_layer_names.resize(slip_polynomial_degree);
+        slip_angle_layer_names.resize(slip_angle_polynomial_degree);
+        
+        for (int i = 0; i < slip_polynomial_degree; ++i) {
+            slip_layer_names[i] = slip_layer_name + std::to_string(i + 1);
+        }
+
+        for (int i = 0; i < slip_angle_polynomial_degree; ++i) {
+            slip_angle_layer_names[i] = slip_angle_layer_name + std::to_string(i + 1);
+        }
+
+        // Stampa per verifica
+        std::cout << "Slip Layer Names:\n";
+        for (const auto& name : slip_layer_names) {
+            std::cout << name << std::endl;
+        }
+
+        std::cout << "\nSlip Angle Layer Names:\n";
+        for (const auto& name : slip_angle_layer_names) {
+            std::cout << name << std::endl;
+        }
+
+    }
+    
     /* std::list<std::tuple<geometry_msgs::PointStamped,geometry_msgs::PointStamped>> applyTransform(grid_map::GridMap& localMap, const std::string& layer_name, const geometry_msgs::TransformStamped& transform){
         
         checkEnlargeMap(localMap, transform);
@@ -293,7 +377,7 @@ private:
         return local_global_points_mapping;
     }
      */
-    
+
     std::list<std::tuple<geometry_msgs::PointStamped,geometry_msgs::PointStamped>> applyTransform(grid_map::GridMap& localMap, const std::string& layer_name, geometry_msgs::TransformStamped transform){
         geometry_msgs::PointStamped max,min;
         max.point.x = -1000000;
@@ -349,7 +433,7 @@ private:
 
         return local_global_points_mapping;
     }
-    
+
     void updateGlobalMapKalman(grid_map::GridMap& localMap, const std::string& mean_layer_name, const std::string& variance_layer_name, geometry_msgs::TransformStamped transform, std::list<std::tuple<geometry_msgs::PointStamped,geometry_msgs::PointStamped>> local_global_points_mapping){
         
         for(const auto& t : local_global_points_mapping){
@@ -382,7 +466,7 @@ private:
 
         publish_gridmap();
     }
-    
+
     void updateGlobalMap(grid_map::GridMap& localMap, const std::vector<std::string>& layers, const geometry_msgs::TransformStamped* transform){
         
         if (transform != nullptr) {
@@ -527,7 +611,7 @@ private:
     }
 
     void updateColorGlobalMap(grid_map::GridMap& localMap, const geometry_msgs::TransformStamped& transform){
-        
+
         checkEnlargeMap(localMap, transform);
 
         for (grid_map::GridMapIterator it(localMap); !it.isPastEnd(); ++it){
@@ -567,7 +651,7 @@ private:
                 }
 
                 std::vector<int>& countsVec = colorCounts_[globalIndex];
-               
+
                 if (countsVec.empty()) {
                     countsVec.resize(robot4ws_mapping::NUM_COLORS, 0);
                 }
@@ -684,7 +768,34 @@ private:
             enlargeMap(maxGlobalPosition, minGlobalPosition);
         }
     }
-        
+
+    bool handle_surface_normal_request(robot4ws_mapping::get_surface_normal::Request& req, robot4ws_mapping::get_surface_normal::Response& res){
+        //ROS_INFO("Position request: (%f, %f)", req.position.x, req.position.y);
+
+        grid_map::Position position(req.position.x, req.position.y);
+        if(globalMap_.isInside(position)){
+            geometry_msgs::Vector3 normal_vector;
+            normal_vector.x = globalMap_.atPosition(surface_orientation_x_layer_name, position);        
+            normal_vector.y = globalMap_.atPosition(surface_orientation_y_layer_name, position);
+            normal_vector.z = globalMap_.atPosition(surface_orientation_z_layer_name, position);        
+            res.normal = normal_vector;
+
+            grid_map::Index idx;
+            if (globalMap_.getIndex(position, idx)){
+                res.map_cell_x = idx.x();
+                res.map_cell_y = idx.y();
+                return true;
+            } else {
+                ROS_WARN("multi_layer_map_node: Unable to convert position to index, position out of bounds.");
+                return false;
+            }
+
+        } else{
+            ROS_WARN("multi_layer_map_node: get_surface_normal service [Position request out of map range]");
+            return false;
+        }
+    }
+
     void publishColorMapImage(){
         // Creare un'immagine OpenCV a 3 canali (BGR)
         grid_map::Size size = globalMap_.getSize();

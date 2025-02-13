@@ -77,6 +77,14 @@ Visualization Manager:
       Radius: 0.10000000149011612
       Reference Frame: Archimede_base_link
       Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /surface_orientation
+      Name: MarkerArray
+      Namespaces:
+        surface_orientation: true
+      Queue Size: 100
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -90,7 +98,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 10
+      Distance: 6.337989807128906
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1

@@ -18,6 +18,8 @@
   <arg name="world_name" default="tilted_floor_walls_and_obstacles.world"/>
   <arg name="p38_env" default="/home/ros/p38Env/bin/python3.8"/>
   <arg name="add_velodyneHDL32E" default="true"/>
+  <arg name="include_terrain_slip_plugin" default="false"/>
+  <arg name="neural_network_model" default="use_simple_slip_function"/>
 
   <!-- include_color_detection arguments -->
   <arg name="include_color_detection" default="false"/>
@@ -29,6 +31,10 @@
   <arg name="include_bag" default="false"/>  
   <arg name="bag_file" default="/media/ros/142F8F8C794D9A16/test_filter_bag.bag"/>
 
+  <!-- record bag arguments -->
+  <arg name="record_bag" default="false"/>
+  <arg name="record_bag_file" default="/media/ros/142F8F8C794D9A16/test_bagfile_record.bag"/>
+
   <!-- grid_map stuffs -->
   <rosparam command="load" file="$(find robot4ws_mapping)/config/$(arg gridmap_config_file)" ns="gridmap"/>
 
@@ -39,6 +45,12 @@
   <node name="surface_orientation_node" pkg="robot4ws_mapping" type="surface_orientation_node" output="screen"/>
   <node name="obstacles_node" pkg="robot4ws_mapping" type="obstacles_node" output="screen" />
   <node name="slip_node" pkg="robot4ws_mapping" type="slip_node" output="screen" />
+
+  <!-- include color_detection -->
+  <group if="$(arg include_color_detection)">
+    <include file="$(find robot4ws_perception)/launch/color_detection.launch"/>
+    <node name="color_detection_node" pkg="robot4ws_mapping" type="color_detection_node" output="screen" />
+  </group>
   
   <node name="rviz" pkg="rviz" type="rviz" args="-d $(find robot4ws_mapping)/rviz/grid_map.rviz" />
 
@@ -50,6 +62,8 @@
         <arg name="world_name" value="$(arg world_name)"/>
         <arg name="p38_env" value="$(arg p38_env)"/>
         <arg name="add_velodyneHDL32E" value="$(arg add_velodyneHDL32E)"/>
+        <arg name="include_terrain_slip_plugin" value="$(arg include_terrain_slip_plugin)"/>
+        <arg name="neural_network_model" value="$(arg neural_network_model)"/>
       </include>
     </group>
     <group if="$(arg include_teleop)">
@@ -58,6 +72,8 @@
         <arg name="world_name" value="$(arg world_name)"/>
         <arg name="p38_env" value="$(arg p38_env)"/>
         <arg name="add_velodyneHDL32E" value="$(arg add_velodyneHDL32E)"/>
+        <arg name="include_terrain_slip_plugin" value="$(arg include_terrain_slip_plugin)"/>
+        <arg name="neural_network_model" value="$(arg neural_network_model)"/>
       </include>
     </group>
   </group>
@@ -72,12 +88,10 @@
     <node pkg="rosbag" type="play" name="rosbag_play" args="$(arg bag_file)" output="screen"/>
   </group>
 
-  <!-- include link_state_to_odom -->
-  <group if="$(arg include_color_detection)">
-    <include file="$(find robot4ws_perception)/launch/color_detection.launch"/>
+  <!-- record play bag -->
+  <group if="$(arg include_bag)">
+    <node pkg="rosbag" type="record" name="rosbag_record" args="-a -O $(arg record_bag_file)" output="screen" required="true"/>
   </group>
-
-  <node name="color_detection_node" pkg="robot4ws_mapping" type="color_detection_node" output="screen" />
 
 </launch>
 

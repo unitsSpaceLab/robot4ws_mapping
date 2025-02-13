@@ -42,7 +42,7 @@ public:
 
         color_map_update_pub = nh_.advertise<robot4ws_mapping::GridMapUpdateMsg>(grid_map_update_topic_name, 1);
         grid_map_pub = nh_.advertise<grid_map_msgs::GridMap>("localMapColor_debug", 1, true);
-        
+
         ROS_INFO("Color detector node ready...");
     }
 
@@ -53,13 +53,13 @@ public:
         for (const auto& detection : msg->detections){
             updated |= processDetection(detection);
         }
-        
+
         if (updated) {
             pub_grid_map_update(localMap, msg -> odom);
-            publish_gridmap(localMap);
+            publish_gridmap_debug(localMap);
         }
     }
-   
+
     void pub_grid_map_update(grid_map::GridMap localMap, nav_msgs::Odometry odom_msg){
         grid_map_msgs::GridMap map_msg;
         grid_map::GridMapRosConverter::toMessage(localMap, map_msg);
@@ -70,14 +70,13 @@ public:
         update_color_msg.header.frame_id = color_layer_name;
 
         update_color_msg.local_gridmap = map_msg;
-        
+
         update_color_msg.odom = odom_msg;
 
         color_map_update_pub.publish(update_color_msg);
     }
-    
-    void publish_gridmap(grid_map::GridMap localMap){
-        //localMap.setTimestamp(ros::Time::now().toNSec());
+
+    void publish_gridmap_debug(grid_map::GridMap localMap){
         grid_map_msgs::GridMap message;
         grid_map::GridMapRosConverter::toMessage(localMap, message);
         message.info.header.frame_id = "Archimede_footprint";
@@ -154,7 +153,7 @@ private:
             ROS_WARN_STREAM("Parameter [gridmap/color/area_threshold] not found. Using default value: " << area_threshold);
         }
     }
-    
+
     void initLocalMap(){
         localMap.setGeometry(grid_map::Length(local_map_size, local_map_size), cell_size);
         localMap.setFrameId(grid_map_frame_id);
@@ -172,15 +171,21 @@ private:
         if (it != colorMap.end()){
             color = it->second;
         } else {
-            ROS_WARN("Color '%s' not recognized in color_detection_node.", detection.color_name.c_str());
+            ROS_WARN("color_detection_node: Color '%s' not recognized.", detection.color_name.c_str());
             return false;
         }
 
-        if (z > height_threshold || area < area_threshold) {
+        //ROS_INFO("z = %f, height_treshold = %f, area = %f, area_tresh = %f", z, height_threshold, area, area_threshold);
+
+        //if (z > height_threshold || area < area_threshold) {
+        if(area < area_threshold){
             return processBBox(detection, color);
-        
         }
-        return processContour(detection, color);
+        else {
+            bool check = processContour(detection, color);
+            //ROS_INFO("Check result: %s", check ? "true" : "false");
+            return check;
+        }
     }
 
     bool processBBox(const robot4ws_msgs::ColorDetection3D& detection, robot4ws_mapping::ColorId color) {
@@ -202,7 +207,10 @@ private:
     }
 
     bool processContour(const robot4ws_msgs::ColorDetection3D& detection, robot4ws_mapping::ColorId color) {
-        if (detection.contour_points.empty()) return false;
+        if (detection.contour_points.empty()){
+            //ROS_INFO("Empty contour..");
+            return false;
+        }
 
         const auto& pos = detection.detection.bbox.center.position;
         const float conf = detection.detection.results[0].score;
@@ -222,7 +230,10 @@ private:
     }
 
     bool updateGridArea(const grid_map::Position& min_pos, const grid_map::Position& max_pos, const std::vector<grid_map::Position>& points, float confidence, robot4ws_mapping::ColorId color){
-        if (points.size() < 3) return false;
+        if (points.size() < 3){
+            //ROS_INFO("Two few points..");
+            return false;
+        } 
 
         const grid_map::Position center = (min_pos + max_pos) * 0.5;
         const double falloff_radius = std::max(max_pos.x() - min_pos.x(), 
@@ -235,12 +246,12 @@ private:
         for (pos.x() = min_pos.x(); pos.x() <= max_pos.x(); pos.x() += cell_size) {
             for (pos.y() = min_pos.y(); pos.y() <= max_pos.y(); pos.y() += cell_size) {
                 if (!localMap.isInside(pos) || !isInPolygon(pos, points)) continue;
-            
+        
                 const double dist = (pos - center).norm();
                 const float cell_conf = confidence * std::max(0.0f, float(1.0 - (dist / falloff_radius)));
                 
                 localMap.getIndex(pos, idx);
-                                
+                //ROS_INFO("cell_conf: %f, localMap value: %f", cell_conf,localMap.at(color_confidence_layer_name, idx));              
                 if (cell_conf < localMap.at(color_confidence_layer_name, idx)){
                     localMap.at(color_layer_name, idx) = color;
                     localMap.at(color_confidence_layer_name, idx) = cell_conf;

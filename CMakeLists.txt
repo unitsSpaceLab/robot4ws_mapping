@@ -18,6 +18,7 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
   message_runtime
   robot4ws_msgs
+  nav_msgs
 )
 
 add_message_files(
@@ -25,11 +26,17 @@ add_message_files(
   GridMapUpdateMsg.msg
 )
 
+add_service_files(
+  FILES
+  get_surface_normal.srv
+)
+
 generate_messages(
   DEPENDENCIES
   std_msgs
   nav_msgs
   grid_map_msgs
+  geometry_msgs
 )
 
 catkin_package(
