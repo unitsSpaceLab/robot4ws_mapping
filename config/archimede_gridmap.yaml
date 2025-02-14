@@ -5,6 +5,8 @@ local_map_size: 5.0 # meters
 grid_map_frame_id: Archimede_foot_start
 elevation_logic: percentile # choose mean or percentile (median -> percentile 0.5)
 percentile: 0.8
+initial_variance: 1000000 #1e6
+initial_confidence: 1000000 #1e6
 
 # layer names
 elevation_layer_name: elevation

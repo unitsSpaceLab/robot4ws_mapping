@@ -44,7 +44,7 @@ public:
         localMap.setGeometry(grid_map::Length(local_map_size, local_map_size), cell_size);
         localMap[elevation_layer_name].setZero();
         localMap[cloudPoint_counter_layer_name].setZero();
-        localMap[elevation_variance_layer_name].setConstant(1e6);
+        localMap[elevation_variance_layer_name].setConstant(initial_variance);
 
         std::unordered_map<grid_map::Index, std::vector<double>, robot4ws_mapping::IndexHash, robot4ws_mapping::IndexEqual> cell_values;
 
@@ -160,7 +160,7 @@ private:
 
     std::string elevation_layer_name, elevation_variance_layer_name, odom_topic_name, grid_map_update_topic_name, pc2_filtered_topic_name, cloudPoint_counter_layer_name;
     std::string elevation_logic;
-    double local_map_size, cell_size, lidar_variance, pc_height_threshold, percentile;
+    double local_map_size, cell_size, lidar_variance, pc_height_threshold, percentile, initial_variance;
 
     nav_msgs::Odometry actual_odom_msg;
     bool pose_received;
@@ -175,6 +175,11 @@ private:
         {
             cell_size = 0.2;
             ROS_WARN_STREAM("Parameter [gridmap/cell_size] not found. Using default value: " << cell_size);
+        }
+        if (! nh_.getParam("gridmap/initial_variance",initial_variance))
+        {
+            initial_variance = 1e6;
+            ROS_WARN_STREAM("Parameter [gridmap/initial_variance] not found. Using default value: " << initial_variance);
         }
         
         //Robot related params

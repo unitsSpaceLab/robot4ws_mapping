@@ -95,6 +95,7 @@ private:
     double cell_size, local_map_size;
     double height_threshold;
     double area_threshold;
+    double initial_confidence;
 
     //Topics
     std::string grid_map_update_topic_name, color_detection_topic_name;
@@ -115,6 +116,11 @@ private:
         {
             grid_map_frame_id = "Archimede_foot_print";
             ROS_WARN_STREAM("Parameter [gridmap/grid_map_frame_id] not found. Using default value: " << grid_map_frame_id);
+        }
+        if (! nh_.getParam("gridmap/initial_confidence",initial_confidence))
+        {
+            initial_confidence = 1e6;
+            ROS_WARN_STREAM("Parameter [gridmap/initial_confidence] not found. Using default value: " << initial_confidence);
         }
         
         //Topics
@@ -158,7 +164,7 @@ private:
         localMap.setGeometry(grid_map::Length(local_map_size, local_map_size), cell_size);
         localMap.setFrameId(grid_map_frame_id);
         localMap.add(color_layer_name, robot4ws_mapping::Unknown);
-        localMap.add(color_confidence_layer_name, 1e6);
+        localMap.add(color_confidence_layer_name, initial_confidence);
     }
 
     bool processDetection(const robot4ws_msgs::ColorDetection3D& detection){
@@ -277,7 +283,7 @@ private:
 
     void resetGridMap() {
         localMap[color_layer_name].setConstant(robot4ws_mapping::Unknown);
-        localMap[color_confidence_layer_name].setConstant(1e6);
+        localMap[color_confidence_layer_name].setConstant(initial_confidence);
     }
 };
 

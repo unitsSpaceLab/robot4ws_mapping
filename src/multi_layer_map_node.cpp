@@ -28,7 +28,6 @@ public:
         load_params();
         init_slip_layers();
         load_robot_static_tf();
-        initial_variance = 100;
 
         init_global_map();
 
@@ -113,13 +112,13 @@ private:
     std::string grid_map_frame_id;
 
     double global_map_size, local_map_size;
-    double cell_size, initial_variance;
+    double cell_size, initial_variance, initial_confidence;
 
     double slip_angle_polynomial_degree, slip_polynomial_degree;
 
     //Layer names
     std::string elevation_layer_name, elevation_variance_layer_name;
-    std::string cloudPoint_counter_layer_name, color_layer_name;
+    std::string cloudPoint_counter_layer_name, color_layer_name, color_confidence_layer_name;
     std::string obstacles_layer_name, obstacles_variance_layer_name, surface_orientation_layer_name;
     std::string surface_orientation_x_layer_name, surface_orientation_y_layer_name, surface_orientation_z_layer_name, surface_orientation_variance_layer_name;
     std::string slip_layer_name, slip_angle_layer_name;
@@ -159,6 +158,16 @@ private:
         {
             cell_size = 0.2;
             ROS_WARN_STREAM("Parameter [gridmap/cell_size] not found. Using default value: " << cell_size);
+        }
+        if (! nh_.getParam("gridmap/initial_variance",initial_variance))
+        {
+            initial_variance = 1e6;
+            ROS_WARN_STREAM("Parameter [gridmap/initial_variance] not found. Using default value: " << initial_variance);
+        }
+        if (! nh_.getParam("gridmap/initial_confidence",initial_confidence))
+        {
+            initial_confidence = 1e6;
+            ROS_WARN_STREAM("Parameter [gridmap/initial_confidence] not found. Using default value: " << initial_confidence);
         }
 
         //load layer names
@@ -216,6 +225,11 @@ private:
         {
             color_layer_name = "color";
             ROS_WARN_STREAM("Parameter [gridmap/color_layer_name] not found. Using default value: " << color_layer_name);
+        }
+        if (!nh_.getParam("gridmap/color/color_confidence_layer_name",color_confidence_layer_name))
+        {
+            color_confidence_layer_name = "color_confidence";
+            ROS_WARN_STREAM("Parameter [gridmap/color_confidence_layer_name] not found. Using default value: " << color_confidence_layer_name);
         }
 
         // Slip curves coefficients
@@ -291,6 +305,7 @@ private:
         globalMap_.add(surface_orientation_variance_layer_name, initial_variance);
 
         globalMap_.add(color_layer_name, robot4ws_mapping::Unknown);
+        globalMap_.add(color_confidence_layer_name, initial_confidence);
 
         for (const auto& name : slip_layer_names) {
             globalMap_.add(name, 0);
@@ -532,6 +547,7 @@ private:
         for (const auto& layer : newMap.getLayers()) {
             if (layer.c_str() == elevation_variance_layer_name || layer.c_str() == surface_orientation_variance_layer_name || layer.c_str() == obstacles_variance_layer_name) newMap[layer].setConstant(initial_variance);
             else if(layer.c_str() == color_layer_name) newMap[layer].setConstant(robot4ws_mapping::Unknown);
+            else if(layer.c_str() == color_confidence_layer_name) newMap[layer].setConstant(initial_confidence);
             else newMap[layer].setZero();
         }
         
@@ -628,6 +644,57 @@ private:
             try {
                 tf2::doTransform(localPoint, globalPoint, transform);
             } catch (tf2::TransformException &ex) {
+                ROS_WARN("multi_layer_map_node: %s", ex.what());
+            }   
+
+            grid_map::Position globalPosition(globalPoint.point.x, globalPoint.point.y);
+
+            if(!globalMap_.isInside(globalPosition) || !globalMap_.getIndex(globalPosition, globalIndex)){
+                ROS_WARN("multi_layer_map_node: Failed conversion local color map point into global");
+                continue;
+            }
+
+            try {
+                float local_color = localMap.at(color_layer_name, index);
+                float local_confidence = localMap.at(color_confidence_layer_name, index);
+
+                if (std::isnan(local_color) || std::isnan(local_confidence)) {
+                    throw std::runtime_error("multi_layer_map_node: error when integrating colors into global gridmap -> color value or color confidence is NaN");
+                }
+
+                int colorIdLocal = static_cast<int>(local_color);
+                if (colorIdLocal == robot4ws_mapping::Unknown || local_confidence == initial_variance) continue;
+                // NB: if local and global has same confidence, most recent color is preferred
+                if(globalMap_.at(color_confidence_layer_name, globalIndex) >= local_confidence) 
+                    globalMap_.at(color_layer_name, globalIndex) = local_color;
+                    globalMap_.at(color_confidence_layer_name, globalIndex) = local_confidence;
+            }
+            catch (const std::exception& e) {
+                ROS_WARN("Skipping position [%.2f, %.2f]: %s",
+                         globalPosition.x(), globalPosition.y(), e.what());
+            }
+        }
+    }
+    
+    
+    /* void updateColorGlobalMap(grid_map::GridMap& localMap, const geometry_msgs::TransformStamped& transform){
+
+        checkEnlargeMap(localMap, transform);
+
+        for (grid_map::GridMapIterator it(localMap); !it.isPastEnd(); ++it){
+            grid_map::Index index(*it);
+            grid_map::Position localPosition;
+            localMap.getPosition(index, localPosition);
+
+            geometry_msgs::PointStamped localPoint, globalPoint;
+            localPoint.point.x = localPosition.x();
+            localPoint.point.y = localPosition.y();
+
+            grid_map::Index globalIndex;
+
+            try {
+                tf2::doTransform(localPoint, globalPoint, transform);
+            } catch (tf2::TransformException &ex) {
                 ROS_WARN("%s", ex.what());
             }   
 
@@ -676,7 +743,7 @@ private:
                          globalPosition.x(), globalPosition.y(), e.what());
             }
         }
-    }
+    } */
 
     /* void publishColorImage(grid_map::GridMap localMap) {
         // Creare le matrici per i singoli colori (R, G, B)
