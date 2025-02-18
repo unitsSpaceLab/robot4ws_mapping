@@ -48,7 +48,6 @@ public:
 
     void color_detection3D_callback(const robot4ws_msgs::ColorDetection3DArray::ConstPtr& msg){ 
         resetGridMap();
-
         bool updated = false;
         for (const auto& detection : msg->detections){
             updated |= processDetection(detection);
@@ -119,7 +118,7 @@ private:
         }
         if (! nh_.getParam("gridmap/initial_confidence",initial_confidence))
         {
-            initial_confidence = 1e6;
+            initial_confidence = 0;
             ROS_WARN_STREAM("Parameter [gridmap/initial_confidence] not found. Using default value: " << initial_confidence);
         }
         
@@ -181,16 +180,12 @@ private:
             return false;
         }
 
-        //ROS_INFO("z = %f, height_treshold = %f, area = %f, area_tresh = %f", z, height_threshold, area, area_threshold);
-
-        //if (z > height_threshold || area < area_threshold) {
-        if(area < area_threshold){
+        if (bool(detection.is_ground)) {
+            //ROS_INFO_STREAM("is ground!");
+            return processContour(detection, color);
+        } else {
+            //ROS_INFO_STREAM("is box!");
             return processBBox(detection, color);
-        }
-        else {
-            bool check = processContour(detection, color);
-            //ROS_INFO("Check result: %s", check ? "true" : "false");
-            return check;
         }
     }
 
@@ -258,10 +253,12 @@ private:
                 
                 localMap.getIndex(pos, idx);
                 //ROS_INFO("cell_conf: %f, localMap value: %f", cell_conf,localMap.at(color_confidence_layer_name, idx));              
-                if (cell_conf < localMap.at(color_confidence_layer_name, idx)){
+                if (cell_conf >= localMap.at(color_confidence_layer_name, idx)){
+                    //ROS_INFO_STREAM("modifico la mappa");
                     localMap.at(color_layer_name, idx) = color;
                     localMap.at(color_confidence_layer_name, idx) = cell_conf;
                     updated = true;
+                    //ROS_INFO_STREAM(updated);
                 }
             }
         }

@@ -676,7 +676,6 @@ private:
         }
     }
     
-    
     /* void updateColorGlobalMap(grid_map::GridMap& localMap, const geometry_msgs::TransformStamped& transform){
 
         checkEnlargeMap(localMap, transform);
