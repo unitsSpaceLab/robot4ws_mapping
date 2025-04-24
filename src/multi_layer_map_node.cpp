@@ -848,8 +848,13 @@ private:
 
             grid_map::Index idx;
             if (globalMap_.getIndex(position, idx)){
-                res.map_cell_x = idx.x();
-                res.map_cell_y = idx.y();
+                // transform indx to global map frame, instead of map front-left angle (as given by getIndex)
+                grid_map::Index idx_transf;
+                idx_transf.x() = std::floor(globalMap_.getSize()(0) / 2) - idx.x() + std::floor(last_center_position_global_frame.x() / cell_size); // floor the division
+                idx_transf.y() = std::floor(globalMap_.getSize()(1) / 2) - idx.y() + std::floor(last_center_position_global_frame.y() / cell_size); // floor the division
+
+                res.map_cell_x = idx_transf.x();
+                res.map_cell_y = idx_transf.y();
                 return true;
             } else {
                 ROS_WARN("multi_layer_map_node: Unable to convert position to index, position out of bounds.");
