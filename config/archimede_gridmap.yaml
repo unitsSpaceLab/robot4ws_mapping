@@ -3,7 +3,7 @@ cell_size: 0.2 # meters
 global_map_size: 5.0 # meters
 local_map_size: 5.0 # meters
 grid_map_frame_id: Archimede_foot_start
-elevation_logic: percentile # choose mean or percentile (median -> percentile 0.5)
+elevation_logic: mean # choose mean or percentile (median -> percentile 0.5)
 percentile: 0.8
 initial_variance: 1000000 #1e6
 initial_confidence: 0
@@ -38,7 +38,7 @@ camera_frame_id: rs_d435i_depth_optical_frame
 wheel_radius: 0.085
 
 # lidar params
-point_cloud_max_height_threshold: 200 # meters
+point_cloud_max_height_threshold: 20 # meters
 lidar_variance: 0.2
 lidar_frame_id: Archimede_velodyne
 

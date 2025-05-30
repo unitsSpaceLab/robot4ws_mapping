@@ -3,13 +3,14 @@
 #include <grid_map_msgs/GridMap.h>
 #include <geometry_msgs/TransformStamped.h>
 #include <Eigen/Dense>
-#include <cmath> 
+#include <cmath>
 
 #include <robot4ws_mapping/utilities.hpp>
 
 #include <robot4ws_msgs/Dynamixel_parameters1.h>
 #include <robot4ws_msgs/SlipUpdate.h>
 #include <robot4ws_mapping/get_surface_normal.h>
+#include <robot4ws_msgs/Vector3Array.h>
 
 #include <opencv2/opencv.hpp>
 
@@ -19,23 +20,78 @@
 #include <tf2_ros/transform_listener.h>
 #include <nav_msgs/Odometry.h>
 
-#include <functional>
+#include <robot4ws_msgs/SlipUpdateRawData.h>
+#include <robot4ws_msgs/SlipUpdateRawDataArray.h>
+#include <std_msgs/Header.h>
 
-struct PolarPoint{
-    std::pair<float,float> value;
-    double angle;
+#include <functional>
+#include <map>
+
+
+//worflow: wheel position (x,y) ---> descritize to cell ---> get grid index of the cell (only when needed) --> publish the cell index
+
+// PolarPoint struct now include also ground truth velocity and wheel load
+struct PolarPoint {
+    std::pair<float,float> value;  // slip ratio and slip angle
+    double angle;                  // approach angle (beta_c)
+    double velocity_commanded;     // rho_c_i
+    double steer_angle;            // delta_c_i
+    double wheel_load;             // F_n_i (wheel load)
+    double vxg_sim;                // x component of v_sim in ground frame
+    double vyg_sim;                // y component of v_sim in ground frame
 };
 
 
 class SlipNode
 {
 public:
+    // Position-based hash function for grid map positions
+    struct PositionHash {
+        double cell_size_;
+
+        // Default constructor needed for unordered_map
+        PositionHash() : cell_size_(0.2) {} // Use default cell size
+        PositionHash(double cs) : cell_size_(cs) {}
+
+        std::size_t operator()(const grid_map::Position& pos) const {
+            // Discretize to cell centers to handle floating point precision
+            int x_cell = static_cast<int>(std::round(pos.x() / cell_size_));
+            int y_cell = static_cast<int>(std::round(pos.y() / cell_size_));
+            return std::hash<int>()(x_cell) ^ (std::hash<int>()(y_cell) << 1);
+        }
+    };
+
+    // Position equality comparison for grid map positions
+    struct PositionEqual {
+        double cell_size_;
+
+        // Default constructor needed for unordered_map
+        PositionEqual() : cell_size_(0.2) {} // Use default cell size
+        PositionEqual(double cs) : cell_size_(cs) {}
+
+        bool operator()(const grid_map::Position& a, const grid_map::Position& b) const {
+            int ax = static_cast<int>(std::round(a.x() / cell_size_));
+            int ay = static_cast<int>(std::round(a.y() / cell_size_));
+            int bx = static_cast<int>(std::round(b.x() / cell_size_));
+            int by = static_cast<int>(std::round(b.y() / cell_size_));
+            return ax == bx && ay == by;
+        }
+    };
+
     SlipNode()
     {
         //TODO: aggiungere wheel number
         load_params();
+
+        // Initialize position-based map after loading cell_size parameter
+        // we use here the bucket constructor to initialize with custom hash and equal functors
+        position2slips_map = std::unordered_map<grid_map::Position, std::vector<PolarPoint>, PositionHash, PositionEqual>(
+            10, PositionHash(cell_size), PositionEqual(cell_size)
+        );
+
         pose_received = false;
         cmd_received = false;
+        last_slip_data_update = ros::Time::now().toSec();
 
         if (slip_polynomial_degree == 2){
             slipFitCurve = [this](const std::vector<cv::Point2f>& points, const int degree){
@@ -60,20 +116,32 @@ public:
         } else {
             ROS_ERROR("slip_node: Invalid slip angle polynomial degree: %d", slip_angle_polynomial_degree);
         }
-       
-        max_polynomial_degree =  std::max(slip_polynomial_degree, slip_angle_polynomial_degree);
+
+        max_polynomial_degree = std::max(slip_polynomial_degree, slip_angle_polynomial_degree);
 
         odom_sub = nh_.subscribe(odom_topic_name, 5, &SlipNode::odom_callback, this);
         motor_sub = nh_.subscribe("/cmd_vel_motors", 5, &SlipNode::motor_callback, this);
+        terramechanic_forces_sub = nh_.subscribe("/terramechanic_forces", 10, &SlipNode::terramechanic_forces_callback, this);
 
         slip_pub = nh_.advertise<robot4ws_msgs::SlipUpdate>(slip_update_topic_name, 1);
+        slip_pub_raw_data = nh_.advertise<robot4ws_msgs::SlipUpdateRawDataArray>("slip_raw_data", 1);
 
         get_surface_normal_client = nh_.serviceClient<robot4ws_mapping::get_surface_normal>("get_surface_normal");
 
         ROS_INFO("Slip node ready...");
     }
 
-    void odom_callback(const nav_msgs::Odometry::ConstPtr& msg){
+    void terramechanic_forces_callback(const robot4ws_msgs::Vector3Array::ConstPtr& msg) {
+        // Process all vectors in the message
+        for (size_t i = 0; i < msg->names.size(); i++) {
+            if (msg->names[i].find("::F_world") != std::string::npos) {
+                this->wheel_load = msg->vectors[i].z;  // Update the class member variable
+                //ROS_INFO_STREAM("Contact force z for " << msg->names[i] << ": " << wheel_load);
+            }
+        }
+    }
+
+    void odom_callback(const nav_msgs::Odometry::ConstPtr& msg) {
         if (!cmd_received) return;
 
         Eigen::Vector3d linear_velocity_robot;
@@ -92,51 +160,65 @@ public:
             tf2::Vector3(pose.position.x, pose.position.y, pose.position.z)
         );
 
-        for (size_t i = 0; i < wheel_commands.size(); ++i){
-
+        for (size_t i = 0; i < wheel_commands.size(); ++i) {
             tf2::Vector3 translation_tf = wheels_tf[i].getOrigin();
             Eigen::Vector3d translation_eigen(translation_tf.x(), translation_tf.y(), translation_tf.z());
 
+            // Calculate wheel velocity in robot frame
             Eigen::Vector3d wheel_velocity_robot = linear_velocity_robot + angular_velocity_robot.cross(translation_eigen);
 
+            // Transform to wheel's steer frame
             Eigen::Matrix3d R_z = computeRotationMatrixZ(wheel_commands[i].second);
-            Eigen::Vector3d wheel_velocity = R_z * wheel_velocity_robot;
+            Eigen::Vector3d wheel_velocity = R_z.inverse() * wheel_velocity_robot;
+
+            // Calculate slip
             std::pair<float,float> wheel_slip = computeSlip(wheel_commands[i].first, wheel_velocity);
 
+            // Get wheel position and transform
             tf2::Transform wheel_tf = getWheelTf(odom_transform, i);
-
-            // grid_map::Position wheel_map_position = getWheelPosition(odom_transform, i); 
-            grid_map::Position wheel_map_position = grid_map::Position(
-                wheel_tf.getOrigin().x(),
-                wheel_tf.getOrigin().y()
-            );
-
-            double wheel_angle = compute_steer_uphill_angle(wheel_tf);
+            grid_map::Position wheel_map_position(wheel_tf.getOrigin().x(), wheel_tf.getOrigin().y());
 
             auto response = surface_normal_call(wheel_map_position);
 
-            //SURFACE NORMAL NOT USED
-            /* geometry_msgs::Vector3 normal = response.first;
+            // Discretize to cell center for consistent position-based storage
+            grid_map::Position cell_center_position = discretizeToCell(wheel_map_position);
 
-            if (std::isnan(normal.x) || std::isnan(normal.y) || std::isnan(normal.z)){
-                ROS_ERROR("slip_node: Invalid normal vector received from get_surface_normal service.");
-                return;
-            } */
+            // Calculate approach angle
+            double wheel_angle = compute_steer_uphill_angle(wheel_tf);
 
-            uint32_t map_cell_x = response.second.first;
-            uint32_t map_cell_y = response.second.second;
-            grid_map::Index map_index(map_cell_x, map_cell_y);
+            Eigen::Vector3d velocity_ground = computeVelocityGround(wheel_velocity, wheel_tf, response.first);
 
-            //Eigen::Vector3d eigen_normal(normal.x, normal.y, normal.z);
-            //float wheel_angle = compute_steer_uphill_angle(eigen_normal, i);
+            double wheel_load = computeWheelLoad();
 
-            PolarPoint slip_polar_point = {wheel_slip, wheel_angle};
+            // Store all data including wheel load and ground frame velocity
+            PolarPoint slip_polar_point = {
+                wheel_slip,
+                wheel_angle,
+                wheel_commands[i].first,   // commanded velocity
+                wheel_commands[i].second,  // steer angle
+                wheel_load,                // vertical load
+                velocity_ground.x(),       // vxg component
+                velocity_ground.y()        // vyg component
+            };
 
-            position2slips_map[map_index].push_back(slip_polar_point);
-            if(position2slips_map[map_index].size() > max_polynomial_degree){
-                auto curve_coeffs = fit_curves(map_index);
-                publish_slip_update(curve_coeffs.first, curve_coeffs.second, map_cell_x, map_cell_y);
+            // Store using position instead of index - for better handling map enlargements
+            position2slips_map[cell_center_position].push_back(slip_polar_point);
+
+            if (position2slips_map[cell_center_position].size() > max_polynomial_degree) {
+                // Convert position to current index when needed for publishing
+                grid_map::Index current_index;
+                if (getCurrentMapIndex(cell_center_position, current_index)) {
+                    auto curve_coeffs = fit_curves(cell_center_position);
+                    publish_slip_update(curve_coeffs.first, curve_coeffs.second, current_index.x(), current_index.y());
+                }
             }
+        }
+
+        // Periodically publish raw slip data
+        double time_now = ros::Time::now().toSec();
+        if (std::abs(last_slip_data_update - time_now) >= 3) {
+            publish_slip_raw_data();
+            last_slip_data_update = time_now;
         }
     }
 
@@ -187,12 +269,16 @@ private:
     ros::NodeHandle nh_;
     ros::Subscriber odom_sub;
     ros::Subscriber motor_sub;
+    ros::Subscriber terramechanic_forces_sub;
+    ros::Publisher slip_pub_raw_data;
     ros::Publisher slip_pub;
     ros::ServiceClient get_surface_normal_client;
 
     std::string odom_topic_name, slip_update_topic_name, foot_print_frame_id;
 
     double local_map_size, cell_size;
+    double last_slip_data_update;
+    double wheel_load = 0.0;
 
     std::function<std::vector<float>(const std::vector<cv::Point2f>&, const int degree)> slipFitCurve;
     std::function<std::vector<float>(const std::vector<cv::Point2f>&, const int degree)> slipAngleFitCurve;
@@ -203,13 +289,38 @@ private:
     // (drive_velocity, steer)
     std::array<std::pair<float, float>, 4> wheel_commands;
 
-    std::unordered_map<grid_map::Index, std::vector<PolarPoint>, robot4ws_mapping::IndexHash, robot4ws_mapping::IndexEqual> position2slips_map;
+    // Position-based storage instead of index-based - for better handling to map enlargements
+    std::unordered_map<grid_map::Position, std::vector<PolarPoint>, PositionHash, PositionEqual> position2slips_map;
 
     std::array<tf2::Transform, 4> wheels_tf;
 
     nav_msgs::Odometry actual_odom_msg;
     bool pose_received;
     bool cmd_received;
+
+    // Discretize position to cell center for consistent hashing
+    grid_map::Position discretizeToCell(const grid_map::Position& pos) {
+        double x_cell = std::round(pos.x() / cell_size) * cell_size;
+        double y_cell = std::round(pos.y() / cell_size) * cell_size;
+        return grid_map::Position(x_cell, y_cell);
+    }
+
+    // Get current map index for a position via service call
+    bool getCurrentMapIndex(const grid_map::Position& position, grid_map::Index& index) {
+        robot4ws_mapping::get_surface_normal srv;
+        srv.request.position.x = position.x();
+        srv.request.position.y = position.y();
+        srv.request.position.z = 0.0;
+
+        if (get_surface_normal_client.call(srv)) {
+            index.x() = srv.response.map_cell_x;
+            index.y() = srv.response.map_cell_y;
+            return true;
+        } else {
+            ROS_WARN("slip_node: Failed to get current map index for position (%.2f, %.2f)", position.x(), position.y());
+            return false;
+        }
+    }
 
     tf2::Transform getWheelTf(const tf2::Transform& odom_transform, size_t wheel_index){
         const Eigen::Quaterniond eigen_quaternion(computeRotationMatrixZ(wheel_commands[wheel_index].second));
@@ -220,23 +331,9 @@ private:
         return odom_transform * wheels_tf[wheel_index];
     }
 
-    /* grid_map::Position getWheelPosition(const tf2::Transform& odom_transform, size_t wheel_index){
-        const Eigen::Quaterniond eigen_quaternion(computeRotationMatrixZ(wheel_commands[wheel_index].second));
-        wheels_tf[wheel_index].setRotation(tf2::Quaternion(
-            eigen_quaternion.x(), eigen_quaternion.y(), eigen_quaternion.z(), eigen_quaternion.w()
-        ));
-
-        const auto transformed_wheel = odom_transform * wheels_tf[wheel_index];
-
-        return grid_map::Position(
-            transformed_wheel.getOrigin().x(),
-            transformed_wheel.getOrigin().y()
-        );
-    } */
-
-    std::pair<std::vector<float>, std::vector<float>> fit_curves(grid_map::Index wheel_map_index){
-
-        std::vector<PolarPoint> polarPoints = position2slips_map[wheel_map_index];
+    // Updated to use position-based storage
+    std::pair<std::vector<float>, std::vector<float>> fit_curves(const grid_map::Position& position){
+        std::vector<PolarPoint> polarPoints = position2slips_map[position];
 
         // Compute linear regression for slip
         std::vector<cv::Point2f> cartesian_slip_point = slip2cartesian_points(polarPoints, true);
@@ -248,19 +345,6 @@ private:
 
         return {slip_line_coeffs, slip_angle_line_coeffs};
     }
-
-    /* std::vector<cv::Point2f> slip2cartesian_points(const std::vector<PolarPoint>& slip_points, bool longitudinal){
-        std::vector<cv::Point2f> cartesianPoints;
-        cartesianPoints.reserve(slip_points.size());
-
-        for (const auto& point : slip_points) {
-            float r = longitudinal ? point.value.first : point.value.second;
-            float cos_beta = std::cos(point.angle);
-            float sin_beta = std::sin(point.angle);
-            cartesianPoints.emplace_back(r * cos_beta, r * sin_beta);
-        }
-        return cartesianPoints;
-    } */
 
     std::vector<cv::Point2f> slip2cartesian_points(const std::vector<PolarPoint>& slip_points, bool slip_value){
         std::vector<cv::Point2f> cartesianPoints;
@@ -322,7 +406,7 @@ private:
         std::vector<float> coefficients(coeff.data(), coeff.data() + coeff.size());
         return coefficients;
     }
-    
+
     Eigen::Matrix3d computeRotationMatrixZ(double theta){
         double c = cos(theta);
         double s = sin(theta);
@@ -331,6 +415,35 @@ private:
                         s,  c, 0,
                         0,  0, 1;
         return rotation_matrix;
+    }
+
+    Eigen::Vector3d computeVelocityGround(const Eigen::Vector3d& wheel_velocity, 
+                                        const tf2::Transform& wheel_tf, 
+                                        const geometry_msgs::Vector3& surface_normal) {
+        // Convert surface normal to Eigen vector
+        Eigen::Vector3d normal(surface_normal.x, surface_normal.y, surface_normal.z);
+        normal.normalize();
+
+        // Define ground frame axes (z is normal, x is uphill direction, y completes right-handed frame)
+        Eigen::Vector3d z_ground = normal;
+        Eigen::Vector3d x_ground = compute_surface_uphill(normal);
+        x_ground.normalize();
+        Eigen::Vector3d y_ground = z_ground.cross(x_ground);
+        y_ground.normalize();
+
+        // Create rotation matrix from wheel frame to ground frame
+        tf2::Matrix3x3 basis = wheel_tf.getBasis();
+        Eigen::Matrix3d R_wheel_to_global;
+        R_wheel_to_global << basis[0][0], basis[0][1], basis[0][2],
+                            basis[1][0], basis[1][1], basis[1][2],
+                            basis[2][0], basis[2][1], basis[2][2];
+
+        Eigen::Matrix3d R_global_to_ground;
+        R_global_to_ground.row(0) = x_ground;
+        R_global_to_ground.row(1) = y_ground;
+        R_global_to_ground.row(2) = z_ground;
+
+        return R_global_to_ground * R_wheel_to_global * wheel_velocity;
     }
 
     std::pair<float, float> computeSlip(float theoretical_vel, Eigen::Vector3d real_vel) {
@@ -375,11 +488,6 @@ private:
         }
     }
 
-    /* float compute_steer_uphill_angle(const Eigen::Vector3d& normal, int i){
-        Eigen::Vector3d uphill_vector = compute_surface_uphill(normal);
-        return std::acos(wheel_commands[i].second.dot(uphill_vector) / (wheel_commands[i].second.norm() * uphill_vector.norm()));
-    } */
-
     double compute_steer_uphill_angle(const tf2::Transform& transform){
         // Rotazione ZYZ
         // Estrarre la matrice di rotazione dalla trasformazione
@@ -393,7 +501,7 @@ private:
         double r32 = rotation_matrix[2][1];
         double r33 = rotation_matrix[2][2];
 
-        // Calcolare beta (rotazione attorno a Z, intermedia)
+        // Calcolare beta (rotazione attorno a Y, intermedia)
         beta = std::acos(r33);
 
         // Verificare se siamo in una singolarità
@@ -404,8 +512,19 @@ private:
             gamma = 0.0; // Nessuna rotazione secondaria
         }
 
+        // Change from [0 2pi] to [-pi pi]
+        if (gamma > M_PI){
+            gamma = gamma - 2*M_PI;
+        }
+
         return gamma;
     }
+
+
+    double computeWheelLoad() {
+        return wheel_load;
+    }
+
 
     void load_robot_static_tf(){
         tf2_ros::Buffer tf_buffer;
@@ -453,33 +572,6 @@ private:
             ROS_WARN_STREAM("Parameter [gridmap/slip_update_topic_name] not found. Using default value: " << slip_update_topic_name);
         }
 
-        /* //Slip layer names
-        if (!nh_.getParam("gridmap/slip/slip_layer_name",slip_layer_name))
-        {
-            slip_layer_name = "/slip";
-            ROS_WARN_STREAM("Parameter [gridmap/slip_layer_name] not found. Using default value: " << slip_layer_name);
-        }
-        if (!nh_.getParam("gridmap/slip/slip_longitudinal_vertical_axis_layer_name",slip_longitudinal_vertical_axis_layer_name))
-        {
-            slip_longitudinal_vertical_axis_layer_name = "/slip_longitudinal_vertical_axis";
-            ROS_WARN_STREAM("Parameter [gridmap/slip_longitudinal_vertical_axis_layer_name] not found. Using default value: " << slip_longitudinal_vertical_axis_layer_name);
-        }
-        if (!nh_.getParam("gridmap/slip/slip_longitudinal_horizontal_axis_layer_name",slip_longitudinal_horizontal_axis_layer_name))
-        {
-            slip_longitudinal_horizontal_axis_layer_name = "/slip_longitudinal_horizontal_axis";
-            ROS_WARN_STREAM("Parameter [gridmap/slip_longitudinal_horizontal_axis_layer_name] not found. Using default value: " << slip_longitudinal_horizontal_axis_layer_name);
-        }
-        if (!nh_.getParam("gridmap/slip/slip_trasversal_vertical_axis_layer_name",slip_trasversal_vertical_axis_layer_name))
-        {
-            slip_trasversal_vertical_axis_layer_name = "/slip_trasversal_vertical_axis";
-            ROS_WARN_STREAM("Parameter [gridmap/slip_trasversal_vertical_axis_layer_name] not found. Using default value: " << slip_trasversal_vertical_axis_layer_name);
-        }
-        if (!nh_.getParam("gridmap/slip/slip_trasversal_horizontal_axis_layer_name",slip_trasversal_horizontal_axis_layer_name))
-        {
-            slip_trasversal_horizontal_axis_layer_name = "/slip_trasversal_horizontal_axis";
-            ROS_WARN_STREAM("Parameter [gridmap/slip_trasversal_horizontal_axis_layer_name] not found. Using default value: " << slip_trasversal_horizontal_axis_layer_name);
-        } */
-
         if (! nh_.getParam("gridmap/foot_print_frame_id",foot_print_frame_id))
         {
             foot_print_frame_id = "footprint";
@@ -501,6 +593,62 @@ private:
         {
             wheel_radius = 0.085;
             ROS_WARN_STREAM("Parameter [gridmap/wheel_radius] not found. Using default value: " << wheel_radius);
+        }
+    }
+    
+    void publish_slip_raw_data() {
+        robot4ws_msgs::SlipUpdateRawDataArray msg_array;
+        msg_array.header.stamp = ros::Time::now();
+
+        // Process each map cell's slip data using position-based storage
+        for (const auto& pair : position2slips_map) {
+            const grid_map::Position& position = pair.first;
+            const std::vector<PolarPoint>& points_in_cell = pair.second;
+
+            if (points_in_cell.empty()) continue;
+
+            robot4ws_msgs::SlipUpdateRawData single_data_point;
+
+            // Get current indices for this position
+            grid_map::Index current_index;
+            if (getCurrentMapIndex(position, current_index)) {
+                single_data_point.map_cell_x = current_index.x();
+                single_data_point.map_cell_y = current_index.y();
+            } else {
+                continue;
+            }
+
+            // Prepare arrays to hold the data
+            size_t num_points = points_in_cell.size();
+
+            single_data_point.slip_ratio.data.resize(num_points);
+            single_data_point.slip_angle.data.resize(num_points);
+            single_data_point.approach_angles.data.resize(num_points);
+            single_data_point.commanded_velocities.data.resize(num_points);
+            single_data_point.steer_angle.data.resize(num_points);
+            single_data_point.wheel_loads.data.resize(num_points);         
+            single_data_point.vxg_ground_truth.data.resize(num_points);    
+            single_data_point.vyg_ground_truth.data.resize(num_points);    
+
+            // Populate arrays with data from each point
+            for (size_t i = 0; i < num_points; ++i) {
+                single_data_point.slip_ratio.data[i] = points_in_cell[i].value.first;
+                single_data_point.slip_angle.data[i] = points_in_cell[i].value.second;
+                single_data_point.approach_angles.data[i] = points_in_cell[i].angle;
+                single_data_point.commanded_velocities.data[i] = points_in_cell[i].velocity_commanded;
+                single_data_point.steer_angle.data[i] = points_in_cell[i].steer_angle;
+                single_data_point.wheel_loads.data[i] = points_in_cell[i].wheel_load;           
+                single_data_point.vxg_ground_truth.data[i] = points_in_cell[i].vxg_sim;         
+                single_data_point.vyg_ground_truth.data[i] = points_in_cell[i].vyg_sim;         
+            }
+
+            msg_array.data.push_back(single_data_point);
+        }
+
+        // Only publish if we have data
+        if (!msg_array.data.empty()) {
+            slip_pub_raw_data.publish(msg_array);
+            ROS_INFO_THROTTLE(10.0, "Published slip raw data with %zu cell entries", msg_array.data.size());
         }
     }
 };

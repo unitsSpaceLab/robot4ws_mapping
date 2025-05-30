@@ -20,6 +20,7 @@
   <arg name="add_velodyneHDL32E" default="true"/>
   <arg name="include_terrain_slip_plugin" default="false"/>
   <arg name="neural_network_model" default="use_simple_slip_function"/>
+  <arg name="include_wheels_terramechanic_model" default="false"/>
 
   <!-- include_color_detection arguments -->
   <arg name="include_color_detection" default="false"/>
@@ -64,6 +65,7 @@
         <arg name="add_velodyneHDL32E" value="$(arg add_velodyneHDL32E)"/>
         <arg name="include_terrain_slip_plugin" value="$(arg include_terrain_slip_plugin)"/>
         <arg name="neural_network_model" value="$(arg neural_network_model)"/>
+        <arg name="include_wheels_terramechanic_model" value="$(arg include_wheels_terramechanic_model)"/>
       </include>
     </group>
     <group if="$(arg include_teleop)">
@@ -74,6 +76,7 @@
         <arg name="add_velodyneHDL32E" value="$(arg add_velodyneHDL32E)"/>
         <arg name="include_terrain_slip_plugin" value="$(arg include_terrain_slip_plugin)"/>
         <arg name="neural_network_model" value="$(arg neural_network_model)"/>
+        <arg name="include_wheels_terramechanic_model" value="$(arg include_wheels_terramechanic_model)"/>
       </include>
     </group>
   </group>

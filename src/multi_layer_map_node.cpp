@@ -835,11 +835,12 @@ private:
         }
     }
 
-    bool handle_surface_normal_request(robot4ws_mapping::get_surface_normal::Request& req, robot4ws_mapping::get_surface_normal::Response& res){
-        //ROS_INFO("Position request: (%f, %f)", req.position.x, req.position.y);
-
+    bool handle_surface_normal_request(robot4ws_mapping::get_surface_normal::Request& req, 
+                                    robot4ws_mapping::get_surface_normal::Response& res) {
         grid_map::Position position(req.position.x, req.position.y);
-        if(globalMap_.isInside(position)){
+        
+        if(globalMap_.isInside(position)) {
+            // Get surface normal
             geometry_msgs::Vector3 normal_vector;
             normal_vector.x = globalMap_.atPosition(surface_orientation_x_layer_name, position);        
             normal_vector.y = globalMap_.atPosition(surface_orientation_y_layer_name, position);
@@ -847,22 +848,17 @@ private:
             res.normal = normal_vector;
 
             grid_map::Index idx;
-            if (globalMap_.getIndex(position, idx)){
-                // transform indx to global map frame, instead of map front-left angle (as given by getIndex)
-                grid_map::Index idx_transf;
-                idx_transf.x() = std::floor(globalMap_.getSize()(0) / 2) - idx.x() + std::floor(last_center_position_global_frame.x() / cell_size); // floor the division
-                idx_transf.y() = std::floor(globalMap_.getSize()(1) / 2) - idx.y() + std::floor(last_center_position_global_frame.y() / cell_size); // floor the division
-
-                res.map_cell_x = idx_transf.x();
-                res.map_cell_y = idx_transf.y();
+            if (globalMap_.getIndex(position, idx)) {
+                res.map_cell_x = idx.x();  // Use raw index
+                res.map_cell_y = idx.y();  // Use raw index
                 return true;
             } else {
                 ROS_WARN("multi_layer_map_node: Unable to convert position to index, position out of bounds.");
                 return false;
             }
 
-        } else{
-            ROS_WARN("multi_layer_map_node: get_surface_normal service [Position request out of map range]");
+        } else {
+            ROS_WARN("multi_layer_map_node: get_surface_normal service: requested position out of map range.");
             return false;
         }
     }

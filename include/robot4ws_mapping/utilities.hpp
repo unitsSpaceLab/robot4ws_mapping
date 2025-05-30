@@ -32,7 +32,7 @@ namespace robot4ws_mapping {
         Orange = 4,
         Cyan = 5,
         Purple = 6,
-        Last = 7 
+        Last = 7
     };
 
     static const int NUM_COLORS = static_cast<int>(ColorId::Last);
